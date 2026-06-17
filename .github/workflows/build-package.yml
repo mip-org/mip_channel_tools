@@ -794,7 +794,7 @@ jobs:
       - name: Assemble package index
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python -m mip_channel_tools assemble-index
+        run: python -m mip_channel_tools assemble-index --site-dir mip_channel_tools/site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

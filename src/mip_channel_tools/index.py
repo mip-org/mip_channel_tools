@@ -42,17 +42,22 @@ def _package_sort_key(pkg):
 class IndexAssembler:
     """Handles assembling package index from GitHub Release assets."""
 
-    def __init__(self, repo_root='.', dry_run=False):
+    def __init__(self, repo_root='.', dry_run=False, site_dir=None):
         """
         Initialize the index assembler.
 
         Args:
-            repo_root: Path to the channel checkout (holds packages/ and site/).
+            repo_root: Path to the channel checkout (holds packages/).
             dry_run: If True, simulate operations without actual downloading
+            site_dir: Directory of static site assets to deploy. Defaults to
+                <repo_root>/site. The site template now lives in the shared
+                tooling repo, so CI passes that clone's site/ here.
         """
         self.repo_root = os.path.abspath(repo_root)
         self.dry_run = dry_run
         self.github_repo = get_github_repo()
+        self.site_dir = os.path.abspath(site_dir) if site_dir \
+            else os.path.join(self.repo_root, 'site')
 
     def _list_all_releases(self):
         """
@@ -170,7 +175,7 @@ class IndexAssembler:
         Copy the static site assets (index.html, etc.) from site/ into
         the GitHub Pages output directory.
         """
-        site_dir = os.path.join(self.repo_root, 'site')
+        site_dir = self.site_dir
         if not os.path.isdir(site_dir):
             print(f"  Warning: no site/ directory at {site_dir}, skipping static copy")
             return
@@ -284,7 +289,8 @@ class IndexAssembler:
 
 
 def run(args):
-    assembler = IndexAssembler(repo_root=args.repo_root, dry_run=args.dry_run)
+    assembler = IndexAssembler(repo_root=args.repo_root, dry_run=args.dry_run,
+                               site_dir=args.site_dir)
 
     print("Starting index assembly process...")
     if args.dry_run:
@@ -306,7 +312,10 @@ def register(subparsers):
         help="Assemble the channel index from GitHub Release assets.")
     parser.add_argument(
         '--repo-root', default='.',
-        help='Channel checkout holding packages/ and site/ (default: cwd).')
+        help='Channel checkout holding packages/ (default: cwd).')
+    parser.add_argument(
+        '--site-dir', default=None,
+        help='Static site assets to deploy (default: <repo-root>/site).')
     parser.add_argument(
         '--dry-run',
         action='store_true',
