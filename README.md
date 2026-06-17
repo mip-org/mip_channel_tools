@@ -1,30 +1,25 @@
 # mip-channel-tools
 
-Build, index, and release tooling shared by MIP package channels. A channel's
-GitHub Actions workflows call this package to prepare package sources, run
-per-OS setup, upload bundled `.mhl` artifacts to GitHub Releases, assemble the
-channel index, and parse issue-driven build requests.
+The shared build engine for MIP package channels. A channel repo holds only its
+own `packages/` and `site/` plus thin caller workflows; everything else — the
+GitHub Actions logic, the Python CLI, the MATLAB build scripts, the MEX configs,
+the vcpkg triplets, and the developer notes — lives here so every channel shares
+one copy.
 
-This package was extracted from the channel repos (it previously lived under
-their `tools/` directory) so every channel can depend on a single shared copy.
+This was extracted from the channel repos (it previously lived under their
+`tools/` directory and duplicated `scripts/`, `mexopts/`, etc.).
 
-## Install
+## Layout
 
-In a channel's CI, install straight from this repo with pip:
-
-```bash
-python -m pip install "git+https://github.com/mip-org/mip_channel_tools.git@main"
-```
-
-Replace `@main` with a tag (e.g. `@v0.1.0`) or branch to pin a specific
-version. Channel workflows centralize this ref in a shared composite action
-(see "Use from a channel" below).
-
-For local development against a checkout:
-
-```bash
-python -m pip install -e .
-```
+- `.github/workflows/` — **reusable workflows** (`workflow_call`) that channels
+  invoke: `build-package`, `assemble-index`, `push-build`, `scheduled-build`,
+  `build-request`.
+- `src/mip_channel_tools/` — the `mip-channel` CLI (Python package).
+- `scripts/` — MATLAB build helpers (`bundle_one.m`, `test_one.m`, ...).
+- `mexopts/` — MEX compiler configs per architecture.
+- `vcpkg-triplets/` — shared vcpkg overlay triplets (Windows native-dep builds).
+- `notes/` — developer notes on the build system.
+- `adding_a_package.md` — guide for adding a package to a channel.
 
 ## Usage
 
@@ -51,37 +46,48 @@ Commands that read the channel tree (`assemble-index`, `affected`,
 `scheduled-check`, `build-request`) take `--repo-root` (default: the current
 directory), so they must be run from, or pointed at, the channel checkout.
 
+For local development against a checkout:
+
+```bash
+python -m pip install -e .
+```
+
 ## Use from a channel
 
-Channels install this package in CI through a small local composite action
-rather than repeating the install in every workflow. The reference channel
-(`mip-org/mip-core`) defines `.github/actions/install-channel-tools/action.yml`
-as the single source of truth for the repo URL and the installed ref:
+A channel's `.github/workflows/*.yml` are thin **callers**: each owns only its
+event triggers (and concurrency) and delegates to the matching reusable workflow
+here with `secrets: inherit`. For example a channel's `build-package.yml`:
 
 ```yaml
-inputs:
-  ref:
-    default: main          # edit to develop against a different tooling branch
-runs:
-  using: composite
-  steps:
-    - shell: bash
-      env:
-        REPO: https://github.com/mip-org/mip_channel_tools.git
-        REF: ${{ inputs.ref }}
-      run: python -m pip install "git+${REPO}@${REF}"
+on:
+  workflow_dispatch:
+    inputs:
+      package_path: { required: true, type: string }
+      architecture: { required: true, type: choice, options: [any, linux_x86_64, macos_arm64, windows_x86_64] }
+      force:        { type: boolean, default: false }
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+jobs:
+  build-package:
+    uses: mip-org/mip_channel_tools/.github/workflows/build-package.yml@main
+    with:
+      package_path: ${{ inputs.package_path }}
+      architecture: ${{ inputs.architecture }}
+      force: ${{ inputs.force }}
+    secrets: inherit
 ```
 
-Each workflow then references it after checking out the channel repo:
+Each reusable workflow checks out the **calling channel** by default (for
+`packages/` and `site/`) and checks out **this repo at the called ref**
+(`repository: ${{ job.workflow_repository }}`, `ref: ${{ job.workflow_sha }}`)
+into `mip_channel_tools/` for the scripts and the Python package — so a build
+step can `addpath('mip_channel_tools/scripts')` and `pip install` the package.
 
-```yaml
-- name: Install channel tooling
-  uses: ./.github/actions/install-channel-tools
-```
+To point a channel at a different tooling branch or tag, edit the `@<ref>` on
+the caller's `uses:` line.
 
-To point a channel at a different tooling branch or tag, edit the action's
-`ref` input default — a single in-repo change that every workflow picks up.
-
-> The `git+https` install needs `git` on PATH. GitHub-hosted runners have it;
-> the Linux build container (`mathworks/matlab-deps:*-ubi8`) installs it
+> The tooling checkout needs `git` on PATH. GitHub-hosted runners have it; the
+> Linux build container (`mathworks/matlab-deps:*-ubi8`) installs it
 > (`dnf install -y git`) before checkout, so it is available there too.
