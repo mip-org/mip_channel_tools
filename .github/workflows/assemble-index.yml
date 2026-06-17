@@ -1,0 +1,52 @@
+name: Assemble Index
+
+# Reusable workflow: rebuild the channel index from existing GitHub Releases
+# and redeploy GitHub Pages, without triggering any package build. A channel's
+# thin assemble-index.yml caller owns the triggers (manual + push to site/**)
+# and the `pages` concurrency group.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  assemble-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Assemble package index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m mip_channel_tools assemble-index
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/gh-pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
