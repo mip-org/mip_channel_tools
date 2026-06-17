@@ -17,8 +17,8 @@ python -m pip install "git+https://github.com/mip-org/mip_channel_tools.git@main
 ```
 
 Replace `@main` with a tag (e.g. `@v0.1.0`) or branch to pin a specific
-version. The channel workflows do this via a `MIP_CHANNEL_TOOLS_REF` knob (see
-"Use from a channel" below).
+version. Channel workflows centralize this ref in a shared composite action
+(see "Use from a channel" below).
 
 For local development against a checkout:
 
@@ -53,26 +53,34 @@ directory), so they must be run from, or pointed at, the channel checkout.
 
 ## Use from a channel
 
-Channel workflows install this package instead of an in-repo path. Each
-workflow defines:
+Channels install this package in CI through a small local composite action
+rather than repeating the install in every workflow. The reference channel
+(`mip-org/mip-core`) defines `.github/actions/install-channel-tools/action.yml`
+as the single source of truth for the repo URL and the installed ref:
 
 ```yaml
-env:
-  MIP_CHANNEL_TOOLS_REPO: https://github.com/mip-org/mip_channel_tools.git
-  MIP_CHANNEL_TOOLS_REF: main
+inputs:
+  ref:
+    default: main          # edit to develop against a different tooling branch
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REPO: https://github.com/mip-org/mip_channel_tools.git
+        REF: ${{ inputs.ref }}
+      run: python -m pip install "git+${REPO}@${REF}"
 ```
 
-and installs with:
+Each workflow then references it after checking out the channel repo:
 
 ```yaml
 - name: Install channel tooling
-  run: python -m pip install "git+${{ env.MIP_CHANNEL_TOOLS_REPO }}@${{ vars.MIP_CHANNEL_TOOLS_REF || env.MIP_CHANNEL_TOOLS_REF }}"
+  uses: ./.github/actions/install-channel-tools
 ```
 
-The default tracks `main`. To pin a channel to a tag or branch without editing
-its workflows, set a repository (or org) Actions variable named
-`MIP_CHANNEL_TOOLS_REF` (Settings → Secrets and variables → Actions →
-Variables).
+To point a channel at a different tooling branch or tag, edit the action's
+`ref` input default — a single in-repo change that every workflow picks up.
 
 > The `git+https` install needs `git` on PATH. GitHub-hosted runners have it;
 > the Linux build container (`mathworks/matlab-deps:*-ubi8`) installs it
