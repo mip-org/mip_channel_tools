@@ -11,6 +11,7 @@ from . import (
     affected,
     build_request,
     index,
+    isa_level,
     package_setup,
     prepare,
     scheduled,
@@ -32,6 +33,7 @@ def main(argv=None):
     build_request.register(subparsers)
     affected.register(subparsers)
     scheduled.register(subparsers)
+    isa_level.register(subparsers)
 
     args = parser.parse_args(argv)
     return args.func(args) or 0

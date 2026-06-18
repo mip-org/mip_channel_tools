@@ -442,6 +442,14 @@ jobs:
           [ "$fail" -eq 0 ] || { echo "glibc gate FAILED"; exit 1; }
           echo "glibc gate passed: every shipped binary loads on glibc 2.28"
 
+      - name: Gate the SIMD level (Linux; fail if a binary exceeds its target ISA)
+        # Static, runner-CPU-independent check that the build honored its target
+        # -march ceiling (the runtime test is skipped when the runner can't
+        # execute the level). See mip_channel_tools/src/mip_channel_tools/isa_level.py.
+        if: needs.setup.outputs.base_arch == 'linux_x86_64' && steps.bundle_check.outputs.has_bundle == 'true'
+        shell: bash
+        run: python -m mip_channel_tools check-isa-level --architecture "${{ inputs.architecture }}"
+
       - name: Upload bundled artifact
         if: steps.bundle_check.outputs.has_bundle == 'true'
         uses: actions/upload-artifact@v7
