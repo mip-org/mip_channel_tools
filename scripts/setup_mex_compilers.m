@@ -22,6 +22,12 @@ if nargin < 2
     compiler = [];
 end
 
+% x86-64 microarchitecture levels (e.g. 'linux_x86_64_v3') share their base
+% arch's compiler and mexopts; the level only changes the compile flags the
+% package's compile script applies. Normalize to the base arch for compiler
+% setup and the mexopts lookup.
+architecture = regexprep(architecture, '_v[234]$', '');
+
 scriptDir        = fileparts(mfilename('fullpath'));
 mipMexoptsDir    = fullfile(scriptDir, '..', 'mexopts', architecture);
 matlabMexoptsDir = fullfile(matlabroot, 'bin', computer('arch'), 'mexopts');

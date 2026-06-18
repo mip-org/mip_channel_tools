@@ -42,36 +42,67 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.pick.outputs.runner }}
+      container: ${{ steps.pick.outputs.container }}
+      matlab_release: ${{ steps.pick.outputs.matlab_release }}
+      os_family: ${{ steps.pick.outputs.os_family }}
+      base_arch: ${{ steps.pick.outputs.base_arch }}
+      simd_level: ${{ steps.pick.outputs.simd_level }}
     steps:
-      - name: Pick runner for architecture
+      - name: Resolve architecture
         id: pick
         shell: bash
         run: |
-          case "${{ inputs.architecture }}" in
-            any)            runner=ubuntu-latest ;;
-            linux_x86_64)   runner=ubuntu-latest ;;
-            macos_arm64)    runner=macos-14 ;;
+          arch="${{ inputs.architecture }}"
+          # A trailing _vN is an x86-64 microarchitecture (SIMD) level. It
+          # shares the base arch's runner, container, toolchain and MATLAB
+          # release, and differs only by the compile flags the package's
+          # compile script applies. Derive everything downstream from the base
+          # arch; carry the level separately so the test job can decide whether
+          # this runner can actually execute the built binary.
+          base="${arch%_v[234]}"
+          case "$arch" in
+            *_v2) simd=2 ;;
+            *_v3) simd=3 ;;
+            *_v4) simd=4 ;;
+            *)    simd=  ;;
+          esac
+          case "$base" in
+            # 'any' carries no MEX: linux runner, but no build container.
+            any)            runner=ubuntu-latest; os=linux;   container=''; release=R2022a ;;
+            # linux_x86_64 builds inside an old-glibc (2.28) container so the MEX
+            # and any bundled .so load on the RHEL/Rocky 8 fleet. ubi8 is the
+            # oldest glibc MathWorks supports for MATLAB. See MATLAB-GLIBC.md.
+            linux_x86_64)   runner=ubuntu-latest; os=linux;   container='mathworks/matlab-deps:r2022a-ubi8'; release=R2022a ;;
+            # macos_arm64: R2023b is the oldest Apple-Silicon-native MATLAB
+            # (R2022a links arm64 MEX against x86_64 libmx).
+            macos_arm64)    runner=macos-14;      os=macos;   container=''; release=R2023b ;;
             # Pin VS2022, not windows-latest: that image moved to Visual Studio
             # 2026 (v18), which MATLAB does not support as a MEX compiler ("No
-            # Microsoft Visual C++ compiler found"). R2023a detects VS2022 here.
-            windows_x86_64) runner=windows-2022 ;;
+            # Microsoft Visual C++ compiler found"). R2023a is the oldest release
+            # certifying the MinGW we install and detects VS2022 here.
+            windows_x86_64) runner=windows-2022;  os=windows; container=''; release=R2023a ;;
             *)
-              echo "Unknown architecture: ${{ inputs.architecture }}" >&2
+              echo "Unknown architecture: $arch" >&2
               exit 1
               ;;
           esac
-          echo "runner=$runner" >> "$GITHUB_OUTPUT"
+          {
+            echo "runner=$runner"
+            echo "container=$container"
+            echo "matlab_release=$release"
+            echo "os_family=$os"
+            echo "base_arch=$base"
+            echo "simd_level=$simd"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ inputs.architecture }})
     needs: setup
     runs-on: ${{ needs.setup.outputs.runner }}
-    # linux_x86_64 builds inside an old-glibc (2.28) container so the MEX and any
-    # bundled .so load on the RHEL/Rocky 8 fleet. ubi8 is the oldest glibc
-    # MathWorks supports for MATLAB and matches the deployment target exactly; it
-    # is also the lowest glibc the GitHub Actions runner's Node (20/24) runs on.
-    # Other arches use no container (empty string). See MATLAB-GLIBC.md.
-    container: ${{ inputs.architecture == 'linux_x86_64' && 'mathworks/matlab-deps:r2022a-ubi8' || '' }}
+    # Container is resolved per architecture in the setup job (the ubi8
+    # glibc-2.28 image for linux_x86_64 and its _vN levels; empty elsewhere).
+    # See notes/MATLAB-GLIBC.md.
+    container: ${{ needs.setup.outputs.container }}
     outputs:
       has_bundle: ${{ steps.bundle_check.outputs.has_bundle }}
       mhl_name: ${{ steps.bundle_check.outputs.mhl_name }}
@@ -80,7 +111,7 @@ jobs:
       # without it. Install it first (a run: step needs no Node, so it works
       # before checkout even in the container).
       - name: Install git for checkout (Linux container)
-        if: inputs.architecture == 'linux_x86_64'
+        if: needs.setup.outputs.base_arch == 'linux_x86_64'
         shell: bash
         run: dnf install -y git
 
@@ -104,7 +135,7 @@ jobs:
           echo "MIP_ROOT=$root" >> "$GITHUB_ENV"
 
       - name: Linux toolchain (gcc-toolset-10 from Rocky AppStream; glibc 2.28)
-        if: inputs.architecture == 'linux_x86_64'
+        if: needs.setup.outputs.base_arch == 'linux_x86_64'
         shell: bash
         run: |
           # We build in the ubi8 container to pin the glibc floor to 2.28 (the
@@ -167,14 +198,14 @@ jobs:
           python --version
 
       - name: macOS gfortran alias
-        if: inputs.architecture == 'macos_arm64'
+        if: needs.setup.outputs.base_arch == 'macos_arm64'
         run: |
           gfortran-15 --version
           ln -sf /opt/homebrew/bin/gfortran-15 /opt/homebrew/bin/gfortran
           gfortran --version
 
       - name: Windows toolchain (MathWorks-certified MinGW-w64 8.1.0)
-        if: inputs.architecture == 'windows_x86_64'
+        if: needs.setup.outputs.base_arch == 'windows_x86_64'
         shell: pwsh
         run: |
           # The runner ships only a modern GCC (15.x). MATLAB's mingw64.xml
@@ -211,7 +242,7 @@ jobs:
         # Skipped in the ubi8 container: setup-python's prebuilt CPython is built
         # against a newer glibc (needs >= 2.34) and won't run on 2.28. The Linux
         # toolchain step installs the container's native python3 instead.
-        if: inputs.architecture != 'linux_x86_64'
+        if: needs.setup.outputs.base_arch != 'linux_x86_64'
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -259,7 +290,7 @@ jobs:
           fi
 
       - name: Prepare vcpkg environment (Windows)
-        if: inputs.architecture == 'windows_x86_64' && steps.prepared_check.outputs.has_prepared == 'true'
+        if: needs.setup.outputs.base_arch == 'windows_x86_64' && steps.prepared_check.outputs.has_prepared == 'true'
         shell: bash
         env:
           MIP_CACHE_TOKEN: ${{ secrets.MIP_CACHE_TOKEN }}
@@ -338,22 +369,15 @@ jobs:
         uses: matlab-actions/setup-matlab@v3
         with:
           cache: true
-          # R2022a pins the libstdc++/libgfortran ABI axis (MATLAB-GCC.md). The
-          # glibc axis is the ubi8 container's job (MATLAB-GLIBC.md), NOT the
-          # MATLAB version. Per-arch overrides, each the OLDEST release that
-          # works (oldest MEX -> widest forward compatibility):
-          #   - macos_arm64: R2023b, the oldest Apple-Silicon-native MATLAB
-          #     (R2022a links arm64 MEX against x86_64 libmx, "symbol(s) not
-          #     found for arm64").
-          #   - windows_x86_64: R2023a, the oldest release that certifies the
-          #     MinGW we install (8.1.0; see mip_channel_tools/notes/MATLAB-MINGW.md). R2022a's
-          #     mex config predates 8.1.0 and rejects modern GCC outright.
-          #   - everything else: R2022a.
-          release: ${{ inputs.architecture == 'macos_arm64' && 'R2023b' || inputs.architecture == 'windows_x86_64' && 'R2023a' || 'R2022a' }}
+          # Per-arch MATLAB release, resolved in the setup job (R2022a pins the
+          # libstdc++/libgfortran ABI axis; macos_arm64 -> R2023b, windows ->
+          # R2023a, each the oldest that works). The glibc axis is the ubi8
+          # container's job, NOT the MATLAB version. See MATLAB-GCC.md.
+          release: ${{ needs.setup.outputs.matlab_release }}
           # The matlab-deps:ubi8 image already carries MATLAB's system libs, and
           # it's RHEL — setup-matlab's apt-based dependency install can't run
           # there. Skip it inside the container; let it run normally elsewhere.
-          install-system-dependencies: ${{ inputs.architecture != 'linux_x86_64' }}
+          install-system-dependencies: ${{ needs.setup.outputs.base_arch != 'linux_x86_64' }}
 
       - name: Bundle package
         if: steps.prepared_check.outputs.has_prepared == 'true'
@@ -376,7 +400,7 @@ jobs:
           fi
 
       - name: Gate the glibc floor (Linux; fail if a shipped binary needs > 2.28)
-        if: inputs.architecture == 'linux_x86_64' && steps.bundle_check.outputs.has_bundle == 'true'
+        if: needs.setup.outputs.base_arch == 'linux_x86_64' && steps.bundle_check.outputs.has_bundle == 'true'
         shell: bash
         run: |
           # MATLAB-GLIBC.md: a MEX (or a bundled .so) built against newer glibc
@@ -417,6 +441,14 @@ jobs:
           fi
           [ "$fail" -eq 0 ] || { echo "glibc gate FAILED"; exit 1; }
           echo "glibc gate passed: every shipped binary loads on glibc 2.28"
+
+      - name: Gate the SIMD level (Linux; fail if a binary exceeds its target ISA)
+        # Static, runner-CPU-independent check that the build honored its target
+        # -march ceiling (the runtime test is skipped when the runner can't
+        # execute the level). See mip_channel_tools/src/mip_channel_tools/isa_level.py.
+        if: needs.setup.outputs.base_arch == 'linux_x86_64' && steps.bundle_check.outputs.has_bundle == 'true'
+        shell: bash
+        run: python -m mip_channel_tools check-isa-level --architecture "${{ inputs.architecture }}"
 
       - name: Upload bundled artifact
         if: steps.bundle_check.outputs.has_bundle == 'true'
@@ -461,15 +493,15 @@ jobs:
         uses: matlab-actions/setup-matlab@v3
         with:
           cache: true
-          # Mirror the build job's per-arch release choice (R2022a / R2023a /
-          # R2023b). This job runs on the bare runner (no container): it only
+          # Mirror the build job's per-arch release choice (resolved in the
+          # setup job). This job runs on the bare runner (no container): it only
           # loads and tests the already-built .mhl, so glibc portability isn't a
           # concern here — the 2.28-floored MEX loads fine on the newer runner
           # (build-low/run-high).
-          release: ${{ inputs.architecture == 'macos_arm64' && 'R2023b' || inputs.architecture == 'windows_x86_64' && 'R2023a' || 'R2022a' }}
+          release: ${{ needs.setup.outputs.matlab_release }}
 
       - name: Strip build environment (Linux)
-        if: inputs.architecture == 'linux_x86_64' || inputs.architecture == 'any'
+        if: needs.setup.outputs.os_family == 'linux'
         shell: bash
         run: |
           # Bypass apt's resolver: enumerate installed toolchain packages
@@ -507,7 +539,7 @@ jobs:
           sudo ldconfig
 
       - name: Verify strip (Linux)
-        if: inputs.architecture == 'linux_x86_64' || inputs.architecture == 'any'
+        if: needs.setup.outputs.os_family == 'linux'
         shell: bash
         run: |
           leaked=0
@@ -532,7 +564,7 @@ jobs:
           echo "Strip OK: no compiler binaries or runtime libs on the linker path."
 
       - name: Strip build environment (macOS)
-        if: inputs.architecture == 'macos_arm64'
+        if: needs.setup.outputs.os_family == 'macos'
         shell: bash
         run: |
           # Rename rather than rm -rf: an APFS rename is a metadata-only
@@ -559,7 +591,7 @@ jobs:
           fi
 
       - name: Strip build environment (Windows)
-        if: inputs.architecture == 'windows_x86_64'
+        if: needs.setup.outputs.os_family == 'windows'
         shell: pwsh
         run: |
           # Rename rather than uninstall/rm: an NTFS directory rename within
@@ -625,7 +657,7 @@ jobs:
           }
 
       - name: Verify strip (Windows)
-        if: inputs.architecture == 'windows_x86_64'
+        if: needs.setup.outputs.os_family == 'windows'
         shell: pwsh
         run: |
           # Hard gate on the rename-based strip above. If a rename silently
@@ -673,9 +705,52 @@ jobs:
           }
           Write-Output "Strip OK: no compiler/linker binaries under stripped roots."
 
+      - name: Check runner can execute this SIMD level
+        id: cap
+        shell: bash
+        run: |
+          # A _vN build targets an x86-64 microarchitecture level whose
+          # instructions (AVX2 for v3, AVX-512 for v4) the runner CPU may not
+          # support — executing such a binary would SIGILL. Detect the runner's
+          # level and only run the execution test if it meets the build target.
+          # Non-SIMD builds (empty simd_level) always run.
+          target="${{ needs.setup.outputs.simd_level }}"
+          if [ -z "$target" ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          os="${{ needs.setup.outputs.os_family }}"
+          host=1
+          if [ "$os" = linux ]; then
+            flags=$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2-)
+            has() { echo "$flags" | grep -qw "$1"; }
+            if has avx512f && has avx512bw && has avx512cd && has avx512dq && has avx512vl; then
+              host=4
+            elif has avx2 && has fma && has bmi1 && has bmi2; then
+              host=3
+            elif has sse4_2 && has ssse3 && has popcnt; then
+              host=2
+            fi
+          elif [ "$os" = windows ]; then
+            # Reuse the exact detector shipped to users (kernel32
+            # IsProcessorFeaturePresent); it prints the psABI level integer.
+            host=$(powershell -NoProfile -ExecutionPolicy Bypass \
+              -File 'mip/+mip/+build/private/cpu_level.ps1' | tr -d '[:space:]')
+          fi
+          echo "Runner supports up to x86-64-v${host:-1}; this build targets x86-64-v$target."
+          if [ "${host:-1}" -ge "$target" ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Runner CPU is x86-64-v${host:-1} but this build targets x86-64-v$target; skipping the execution test. The .mhl is still published."
+            echo "can_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Test bundled package
         # On non-macOS arches, run normally — any matlab error fails the job.
-        if: inputs.architecture != 'macos_arm64'
+        # Skipped when the runner CPU can't execute the build's SIMD level (see
+        # the capability check above): the binary would SIGILL. The build and
+        # glibc gate still validated it, so it ships untested-at-runtime.
+        if: needs.setup.outputs.os_family != 'macos' && steps.cap.outputs.can_run == 'true'
         uses: matlab-actions/run-command@v3
         with:
           command: "addpath('mip'); addpath('mip_channel_tools/scripts'); test_one"
@@ -689,14 +764,14 @@ jobs:
         # test/load failure still fails the job, but exit-time SIGSEGV is
         # tolerated. continue-on-error lets the job survive the nonzero
         # matlab return code; the next step is the real gate.
-        if: inputs.architecture == 'macos_arm64'
+        if: needs.setup.outputs.os_family == 'macos'
         continue-on-error: true
         uses: matlab-actions/run-command@v3
         with:
           command: "addpath('mip'); addpath('mip_channel_tools/scripts'); try; test_one; fid = fopen('.tests_passed', 'w'); fclose(fid); catch err; disp(getReport(err)); exit(1); end"
 
       - name: Verify tests passed (macOS)
-        if: inputs.architecture == 'macos_arm64'
+        if: needs.setup.outputs.os_family == 'macos'
         shell: bash
         run: |
           if [ -f .tests_passed ]; then
@@ -737,7 +812,7 @@ jobs:
         # exercise the package in a brew-free env. The test is done, so put it
         # back — otherwise the upload step below can't find `gh`. APFS rename
         # is metadata-only (~ms).
-        if: inputs.architecture == 'macos_arm64'
+        if: needs.setup.outputs.os_family == 'macos'
         shell: bash
         run: |
           if [ -e /opt/homebrew.deleted ]; then

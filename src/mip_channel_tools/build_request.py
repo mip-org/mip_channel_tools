@@ -13,7 +13,8 @@ Free-form input. The title only gates the workflow (it must start with
      folder `packages/<name>/<release>`) OR the keyword `all-packages`
      to mean "every package in this channel".
   2. One or more architecture keywords:
-     `any`, `linux_x86_64`, `macos_arm64`, `windows_x86_64`, or `all`.
+     `any`, `linux_x86_64[_v2|_v3|_v4]`, `macos_arm64`,
+     `windows_x86_64[_v3|_v4]`, or `all`.
   3. Optionally, the keyword `force` to rebuild even if a matching .mhl
      is already published with the same source hash. Applies only to
      dispatches from the same line.
@@ -58,8 +59,16 @@ PACKAGE_REF_RE = re.compile(
     r"\b([A-Za-z0-9._+\-]+)@([A-Za-z0-9._+\-]+)"
 )
 
+# Base architectures plus x86-64 microarchitecture (SIMD) levels. A `_vN`
+# suffix is a psABI level (v2=SSE4.2, v3=AVX2, v4=AVX-512) that shares the
+# base arch's runner/container/toolchain and differs only by the compile
+# flags the package's compile script applies. MSVC's `/arch:` granularity
+# can't target v2 distinctly, so Windows ships base + v3 + v4 only.
 SUPPORTED_ARCHITECTURES = (
-    "any", "linux_x86_64", "macos_arm64", "windows_x86_64",
+    "any",
+    "linux_x86_64", "linux_x86_64_v2", "linux_x86_64_v3", "linux_x86_64_v4",
+    "macos_arm64",
+    "windows_x86_64", "windows_x86_64_v3", "windows_x86_64_v4",
 )
 
 ALL_KEYWORD = "all"
