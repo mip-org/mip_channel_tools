@@ -1,0 +1,65 @@
+name: Download Stats
+
+# Reusable workflow: snapshot GitHub Release asset download counts and fold
+# them into a monotonic lifetime total stored on the channel repo's `stats`
+# branch (download-stats.json). Survives the count resets that happen when a
+# package is rebuilt (gh release upload --clobber starts the asset at zero).
+# A channel's thin download-stats.yml caller owns the schedule trigger.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  download-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Checkout stats branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          if ! git clone --quiet --single-branch --branch stats \
+                "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" stats-data 2>/dev/null; then
+            echo "stats branch not found; creating it"
+            git clone --quiet --depth 1 \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" stats-data
+            git -C stats-data checkout --orphan stats
+            git -C stats-data rm -rqf . || true
+          fi
+          git -C stats-data config user.name "github-actions[bot]"
+          git -C stats-data config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Accumulate download stats
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m mip_channel_tools download-stats --stats-file stats-data/download-stats.json
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          cd stats-data
+          git add download-stats.json
+          if git diff --cached --quiet; then
+            echo "No change in download stats."
+          else
+            git commit -m "Update download stats ($(date -u +%Y-%m-%dT%H:%MZ))"
+            git push origin stats
+          fi
