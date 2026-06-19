@@ -673,6 +673,35 @@ jobs:
           }
           Write-Output "Strip OK: no compiler/linker binaries under stripped roots."
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # This reusable workflow lives in mip_channel_tools; check out its own
+      # repo (at the same ref it was called at) to get the build scripts,
+      # mexopts, and vcpkg triplets alongside the Python package, then install
+      # the package. The channel checkout (packages/, site/) is the default
+      # `actions/checkout` above; this is a second checkout into a subdir. This
+      # MUST happen before "Test bundled package": that step runs
+      # `addpath('mip_channel_tools/scripts'); test_one`, so the scripts have to
+      # be on disk first.
+      - name: Checkout channel tooling
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        shell: bash
+        # `python -m pip`, not bare `pip`: setup-python's pip wrapper bakes the
+        # host tool-cache path into its shebang, so bare `pip` fails with "bad
+        # interpreter" in the ubi8 build container (where `python` is the
+        # toolchain python3.9).
+        run: |
+          echo "MIP_TOOLS_DIR=$GITHUB_WORKSPACE/mip_channel_tools" >> "$GITHUB_ENV"
+          python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
       - name: Test bundled package
         # On non-macOS arches, run normally — any matlab error fails the job.
         if: inputs.architecture != 'macos_arm64'
@@ -705,32 +734,6 @@ jobs:
             echo "::error::tests failed (no .tests_passed marker)"
             exit 1
           fi
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      # This reusable workflow lives in mip_channel_tools; check out its own
-      # repo (at the same ref it was called at) to get the build scripts,
-      # mexopts, and vcpkg triplets alongside the Python package, then install
-      # the package. The channel checkout (packages/, site/) is the default
-      # `actions/checkout` above; this is a second checkout into a subdir.
-      - name: Checkout channel tooling
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: mip_channel_tools
-      - name: Install channel tooling
-        shell: bash
-        # `python -m pip`, not bare `pip`: setup-python's pip wrapper bakes the
-        # host tool-cache path into its shebang, so bare `pip` fails with "bad
-        # interpreter" in the ubi8 build container (where `python` is the
-        # toolchain python3.9).
-        run: |
-          echo "MIP_TOOLS_DIR=$GITHUB_WORKSPACE/mip_channel_tools" >> "$GITHUB_ENV"
-          python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
 
       - name: Restore Homebrew for upload (macOS)
         # The macOS strip step renamed /opt/homebrew (which holds `gh`) to
