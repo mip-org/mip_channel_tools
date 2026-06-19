@@ -10,6 +10,7 @@ import argparse
 from . import (
     affected,
     build_request,
+    download_stats,
     index,
     package_setup,
     prepare,
@@ -32,6 +33,7 @@ def main(argv=None):
     build_request.register(subparsers)
     affected.register(subparsers)
     scheduled.register(subparsers)
+    download_stats.register(subparsers)
 
     args = parser.parse_args(argv)
     return args.func(args) or 0
