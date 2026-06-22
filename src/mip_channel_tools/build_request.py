@@ -13,7 +13,8 @@ Free-form input. The title only gates the workflow (it must start with
      folder `packages/<name>/<release>`) OR the keyword `all-packages`
      to mean "every package in this channel".
   2. One or more architecture keywords:
-     `any`, `linux_x86_64`, `macos_arm64`, `windows_x86_64`, or `all`.
+     `any`, `linux_x86_64`, `macos_arm64`, `windows_x86_64`,
+     `numbl_wasm`, or `all`.
   3. Optionally, the keyword `force` to rebuild even if a matching .mhl
      is already published with the same source hash. Applies only to
      dispatches from the same line.
@@ -59,7 +60,7 @@ PACKAGE_REF_RE = re.compile(
 )
 
 SUPPORTED_ARCHITECTURES = (
-    "any", "linux_x86_64", "macos_arm64", "windows_x86_64",
+    "any", "linux_x86_64", "macos_arm64", "windows_x86_64", "numbl_wasm",
 )
 
 ALL_KEYWORD = "all"

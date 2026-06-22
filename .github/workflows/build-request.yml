@@ -14,9 +14,9 @@ name: Build request
 #         or the keyword `all-packages` to mean "every package in the
 #         channel"
 #       * one or more architecture keywords from
-#         {any, linux_x86_64, macos_arm64, windows_x86_64, all}
+#         {any, linux_x86_64, macos_arm64, windows_x86_64, numbl_wasm, all}
 #         (`all` expands to every arch declared in the package's mip.yaml,
-#          intersected with the four channel-supported arches above)
+#          intersected with the channel-supported arches above)
 #       * optionally `force` to rebuild even if the .mhl is already
 #         published with a matching source hash. Applies to that line only.
 #

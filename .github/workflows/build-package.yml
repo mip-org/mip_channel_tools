@@ -55,6 +55,9 @@ jobs:
             # 2026 (v18), which MATLAB does not support as a MEX compiler ("No
             # Microsoft Visual C++ compiler found"). R2023a detects VS2022 here.
             windows_x86_64) runner=windows-2022 ;;
+            # numbl_wasm produces a portable .wasm (emcc) — no native MEX, no
+            # glibc floor, so it builds on a plain ubuntu runner.
+            numbl_wasm)     runner=ubuntu-latest ;;
             *)
               echo "Unknown architecture: ${{ inputs.architecture }}" >&2
               exit 1
@@ -207,6 +210,15 @@ jobs:
           "MW_MINGW64_LOC=$root" >> $env:GITHUB_ENV
           "$root\bin" >> $env:GITHUB_PATH
 
+      - name: Set up Emscripten (numbl_wasm)
+        # numbl_wasm compile scripts shell out to emcc/em++ to produce a
+        # standalone .wasm. setup-emsdk puts emcc on PATH (via GITHUB_PATH) so
+        # the MATLAB-spawned `system(...)` calls in the compile script find it.
+        if: inputs.architecture == 'numbl_wasm'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 'latest'
+
       - name: Set up Python
         # Skipped in the ubi8 container: setup-python's prebuilt CPython is built
         # against a newer glibc (needs >= 2.34) and won't run on 2.28. The Linux
@@ -236,6 +248,17 @@ jobs:
         run: |
           echo "MIP_TOOLS_DIR=$GITHUB_WORKSPACE/mip_channel_tools" >> "$GITHUB_ENV"
           python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Install fort2c (numbl_wasm)
+        # numbl_wasm packages whose C is transpiled from Fortran at build time
+        # invoke the `fort2c` console script from their compile script. Install
+        # it so it's on PATH for the MATLAB-spawned build. Pinned by the package
+        # only via this URL; bump here to move every channel's transpile in step.
+        if: inputs.architecture == 'numbl_wasm'
+        shell: bash
+        run: |
+          python -m pip install "git+https://github.com/magland/fort2c"
+          fort2c --help >/dev/null
 
       - name: Prepare package
         env:
@@ -458,6 +481,10 @@ jobs:
           path: build/bundled
 
       - name: Set up MATLAB
+        # numbl_wasm ships a .wasm + .numbl.js (no MEX); it is exercised by the
+        # numbl runtime, not MATLAB. Skip MATLAB setup/test for it and validate
+        # the artifact below instead.
+        if: inputs.architecture != 'numbl_wasm'
         uses: matlab-actions/setup-matlab@v3
         with:
           cache: true
@@ -703,11 +730,32 @@ jobs:
           python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
 
       - name: Test bundled package
-        # On non-macOS arches, run normally — any matlab error fails the job.
-        if: inputs.architecture != 'macos_arm64'
+        # On non-macOS native arches, run normally — any matlab error fails the
+        # job. numbl_wasm is validated by the artifact smoke test below, not here.
+        if: inputs.architecture != 'macos_arm64' && inputs.architecture != 'numbl_wasm'
         uses: matlab-actions/run-command@v3
         with:
           command: "addpath('mip'); addpath('mip_channel_tools/scripts'); test_one"
+
+      - name: Smoke test numbl_wasm artifact
+        # The build job already failed if emcc errored; here we confirm the .mhl
+        # ships the expected numbl glue (a .numbl.js builtin + its .wasm) and that
+        # the .wasm is a structurally valid WebAssembly module. Running the
+        # functions end-to-end requires the numbl runtime and is a follow-up
+        # (the old mip-flatironinstitute channel likewise left numbl tests off).
+        if: inputs.architecture == 'numbl_wasm'
+        shell: bash
+        run: |
+          mhl=$(ls build/bundled/*.mhl | head -n1)
+          echo "Smoke-testing $mhl"
+          tmp=$(mktemp -d)
+          unzip -q "$mhl" -d "$tmp"
+          js=$(find "$tmp" -name '*.numbl.js' | head -n1)
+          wasm=$(find "$tmp" -name '*.wasm' | head -n1)
+          if [ -z "$js" ]; then echo "::error::no .numbl.js builtin in $mhl"; exit 1; fi
+          if [ -z "$wasm" ]; then echo "::error::no .wasm in $mhl"; exit 1; fi
+          echo "  found $(basename "$js") and $(basename "$wasm")"
+          node -e "const fs=require('fs');WebAssembly.compile(fs.readFileSync('$wasm')).then(()=>{console.log('  wasm compiles OK');}).catch(e=>{console.error('::error::invalid wasm:',e.message);process.exit(1);})"
 
       - name: Test bundled package (macOS, SIGSEGV-tolerant)
         # MATLAB R2024b+ on macOS arm64 SIGSEGVs in _pthread_tsd_cleanup at
