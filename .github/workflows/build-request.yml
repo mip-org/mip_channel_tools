@@ -3,9 +3,11 @@ name: Build request
 # Issue-driven build trigger.
 #
 # Submitters open an issue listing one or more (package_path, architecture)
-# pairs already present in this channel. On admin approval, the workflow
-# dispatches `build-package.yml` once per pair. Nothing in the repo is
-# modified — there is no clone, copy, commit, or push.
+# pairs already present in this channel. The workflow dispatches
+# `build-package.yml` once per pair when the request is approved: either an
+# admin opens the issue (auto-approved), or an admin comments `approve` on an
+# issue opened by someone else. Nothing in the repo is modified — there is no
+# clone, copy, commit, or push.
 #
 # Issue format (free-form, line-based):
 #   - title starts with `build` (case-insensitive)
@@ -20,8 +22,9 @@ name: Build request
 #       * optionally `force` to rebuild even if the .mhl is already
 #         published with a matching source hash. Applies to that line only.
 #
-# Approval: a comment containing `approve` on its own line, from a
-# user with write+ on the repo (OWNER/MEMBER/COLLABORATOR).
+# Approval: granted automatically when the issue author has write+ on the
+# repo (OWNER/MEMBER/COLLABORATOR), otherwise via a comment containing
+# `approve` on its own line from such a user.
 
 on:
   workflow_call:
@@ -71,12 +74,20 @@ jobs:
         if: steps.check.outputs.proceed == 'true'
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
+          # Admins (write+ on the repo) are auto-approved; the dispatch job
+          # runs in parallel, so the comment shouldn't ask them to `approve`.
+          AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association }}
         run: |
           mkdir -p .ci-tmp
+          auto_approved=""
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR) auto_approved="--auto-approved" ;;
+          esac
           python3 -m mip_channel_tools build-request validate \
             --output-file .ci-tmp/comment.md \
             --title-file .ci-tmp/title.txt \
-            --repo-root .
+            --repo-root . \
+            $auto_approved
 
       - name: Post validation comment
         if: steps.check.outputs.proceed == 'true'
@@ -109,10 +120,22 @@ jobs:
             --title "$new_title"
 
   dispatch-on-approval:
+    # Two ways to reach dispatch:
+    #   * an admin comments `approve` on the build issue, or
+    #   * an admin opens the build issue themselves (no approval needed).
+    # "admin" == write+ on the repo (OWNER/MEMBER/COLLABORATOR).
     if: >-
-      github.event_name == 'issue_comment' &&
       github.event.issue.pull_request == null &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      (
+        (
+          github.event_name == 'issue_comment' &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+        ) ||
+        (
+          github.event_name == 'issues' &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
+        )
+      )
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -122,6 +145,7 @@ jobs:
       - name: Verify trigger conditions
         id: check
         env:
+          EVENT_NAME: ${{ github.event_name }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
@@ -132,11 +156,16 @@ jobs:
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! printf '%s\n' "$COMMENT_BODY" | tr -d '\r' \
-              | grep -iqE '^[[:space:]]*approve[[:space:]]*$'; then
-            echo "Comment does not contain 'approve' on its own line — skipping."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          # On an issue comment, require an explicit `approve` on its own line.
+          # When an admin opens the issue (issues event), the job condition has
+          # already vetted the author, so no approval comment is needed.
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            if ! printf '%s\n' "$COMMENT_BODY" | tr -d '\r' \
+                | grep -iqE '^[[:space:]]*approve[[:space:]]*$'; then
+              echo "Comment does not contain 'approve' on its own line — skipping."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 

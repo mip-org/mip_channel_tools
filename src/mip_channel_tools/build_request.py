@@ -258,7 +258,7 @@ def parse_issue(body, repo_root):
     return deduped, errors
 
 
-def render_validation_comment(entries, errors):
+def render_validation_comment(entries, errors, auto_approved=False):
     if errors or not entries:
         lines = ["The issue is not formatted correctly."]
         lines += ["", "Errors:"] + errors
@@ -290,14 +290,23 @@ def render_validation_comment(entries, errors):
         lines.append(
             f"- `{e['name']}@{e['version']}` ({e['architecture']}{suffix})"
         )
-    lines += [
-        "",
-        "An admin (anyone with write access on this repo) can approve "
-        "this request by replying with `approve` on its own line. On "
-        "approval, `build-package.yml` will be dispatched once per "
-        "(package, architecture) pair listed above — no files in this "
-        "repo are copied or modified.",
-    ]
+    if auto_approved:
+        lines += [
+            "",
+            "You have write access on this repo, so this request is "
+            "approved automatically. `build-package.yml` will be "
+            "dispatched once per (package, architecture) pair listed "
+            "above — no files in this repo are copied or modified.",
+        ]
+    else:
+        lines += [
+            "",
+            "An admin (anyone with write access on this repo) can approve "
+            "this request by replying with `approve` on its own line. On "
+            "approval, `build-package.yml` will be dispatched once per "
+            "(package, architecture) pair listed above — no files in this "
+            "repo are copied or modified.",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -337,7 +346,7 @@ def cmd_validate(args):
     repo_root = Path(args.repo_root).resolve()
     entries, errors = parse_issue(body, repo_root)
     Path(args.output_file).write_text(
-        render_validation_comment(entries, errors)
+        render_validation_comment(entries, errors, args.auto_approved)
     )
     if args.title_file:
         title = canonical_title(entries) or ""
@@ -379,6 +388,9 @@ def register(subparsers):
     v.add_argument("--output-file", required=True)
     v.add_argument("--title-file", default=None)
     v.add_argument("--repo-root", default=".")
+    v.add_argument(
+        "--auto-approved", action="store_true",
+        help="Issue author is an admin, so no `approve` comment is needed.")
     v.set_defaults(func=cmd_validate)
 
     a = sub.add_parser("apply")

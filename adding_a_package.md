@@ -711,7 +711,9 @@ Once the user pushes to `main`, the `push-build.yml` workflow dispatches a
 build for each `(package, architecture)` pair the push touched; each runs
 prepare → bundle (`compile.m`) → test (with the coverage gate) → upload `.mhl`
 → refresh the index. A build can also be requested via a GitHub issue (title
-starting with `Build`, an admin replying `approve`) — see [README.md](README.md).
+starting with `Build`); it dispatches automatically when an admin opens the
+issue, or when an admin replies `approve` to one opened by someone else — see
+[README.md](README.md).
 
 After the workflow completes, users install with:
 
