@@ -29,12 +29,17 @@ end
 
 function copy_and_sanitize_lib_linux(sourceLib, destDir)
 
-    cmd = sprintf('cp -Lf %s %s\n', sourceLib, destDir);
-    system_echo(cmd);
-
     [~, lib_name, lib_ext] = fileparts(sourceLib);
     lib = [lib_name lib_ext];
     local_lib = fullfile(destDir, lib);
+
+    % Skip the copy when the source already is the bundled file -- e.g. a
+    % second bundling pass over the same MEX, where the dep now resolves via
+    % the MEX's $ORIGIN rpath to the copy made by the first pass. cp would
+    % otherwise error on a same-file copy. patchelf below is idempotent.
+    cmd = sprintf('[ "%s" -ef "%s" ] || cp -Lf %s %s', ...
+        sourceLib, local_lib, sourceLib, destDir);
+    system_echo(cmd);
 
     cmd = sprintf('patchelf --set-soname %s          %s', lib, local_lib);
     system_echo(cmd);
@@ -45,12 +50,16 @@ end
 
 function copy_and_sanitize_lib_macos(sourceLib, destDir)
 
-    cmd = sprintf('cp -Lf %s %s', sourceLib, destDir);
-    system_echo(cmd);
-
     [~, lib_name, lib_ext] = fileparts(sourceLib);
     lib = [lib_name lib_ext];
     local_lib = fullfile(destDir, lib);
+
+    % Skip the copy when the source already is the bundled file (a second
+    % bundling pass over the same MEX); cp would error on a same-file copy.
+    % install_name_tool below is idempotent.
+    cmd = sprintf('[ "%s" -ef "%s" ] || cp -Lf %s %s', ...
+        sourceLib, local_lib, sourceLib, destDir);
+    system_echo(cmd);
 
     cmd = sprintf('install_name_tool -id @rpath/%s %s', lib, local_lib);
     system_echo(cmd);
