@@ -30,6 +30,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: 'Publish the result: upload the .mhl to Releases and redeploy the index. When false, build + test only — the .mhl stays as a downloadable CI artifact and the live channel is untouched.'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -790,6 +795,7 @@ jobs:
           fi
 
       - name: Upload to GitHub Release
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m mip_channel_tools upload
@@ -797,7 +803,7 @@ jobs:
   assemble-and-deploy:
     name: assemble + deploy
     needs: [build, test-and-upload]
-    if: always() && needs.build.result == 'success' && (needs.test-and-upload.result == 'success' || needs.test-and-upload.result == 'skipped')
+    if: always() && inputs.publish && needs.build.result == 'success' && (needs.test-and-upload.result == 'success' || needs.test-and-upload.result == 'skipped')
     runs-on: ubuntu-latest
     # Serialize Pages deploys across concurrent package builds.
     concurrency:
