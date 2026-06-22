@@ -604,9 +604,15 @@ jobs:
             "C:\msys64",
             "C:\mingw64",
             "C:\ProgramData\chocolatey",
-            "C:\Program Files\CMake",
-            "C:\Program Files\Git\mingw64"
+            "C:\Program Files\CMake"
           )
+          # NB: do NOT strip "C:\Program Files\Git\mingw64". Git for Windows'
+          # bin\bash.exe and bin\git.exe are thin wrappers that exec the real
+          # binaries under that tree; renaming it breaks the `shell: bash`
+          # steps that follow (they die with "Top-level not found" / "BUG
+          # (fork bomb)"). It holds no build toolchain anyway — the MinGW
+          # compiler lives at C:\mingw810\mingw64 and the MEX links -static,
+          # so there is no MinGW runtime DLL dependency to guard against.
           # Fast path: [IO.Directory]::Move (Win32 MoveFile) is a metadata-only
           # same-volume rename (~ms). It fails (ACCESS_DENIED) while ANY process
           # holds a handle anywhere under the tree — on a fresh runner that pin
@@ -664,8 +670,7 @@ jobs:
             "C:\Strawberry",
             "C:\msys64",
             "C:\mingw64",
-            "C:\Program Files\CMake",
-            "C:\Program Files\Git\mingw64"
+            "C:\Program Files\CMake"
           )
           $leaked = @()
           foreach ($exe in 'cl','link','gcc','g++','gfortran','clang','ld') {
