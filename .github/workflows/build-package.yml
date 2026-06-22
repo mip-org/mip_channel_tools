@@ -249,17 +249,6 @@ jobs:
           echo "MIP_TOOLS_DIR=$GITHUB_WORKSPACE/mip_channel_tools" >> "$GITHUB_ENV"
           python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
 
-      - name: Install fort2c (numbl_wasm)
-        # numbl_wasm packages whose C is transpiled from Fortran at build time
-        # invoke the `fort2c` console script from their compile script. Install
-        # it so it's on PATH for the MATLAB-spawned build. Pinned by the package
-        # only via this URL; bump here to move every channel's transpile in step.
-        if: inputs.architecture == 'numbl_wasm'
-        shell: bash
-        run: |
-          python -m pip install "git+https://github.com/magland/fort2c"
-          fort2c --help >/dev/null
-
       - name: Prepare package
         env:
           BUILD_ARCHITECTURE: ${{ inputs.architecture }}
