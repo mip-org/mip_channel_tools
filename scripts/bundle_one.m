@@ -48,8 +48,36 @@ if ~exist(fullfile(pkgDir, 'mip.yaml'), 'file')
 end
 
 fprintf('Setting up MEX compilers...\n');
-setup_mex_compilers(architecture);
+compiler = resolve_compiler(pkgDir, architecture);
+setup_mex_compilers(architecture, compiler);
 
 fprintf('Bundling: %s (arch=%s)\n', items(1).name, architecture);
 mip.bundle(pkgDir, '--output', outputDir, '--arch', architecture);
 fprintf('Bundle OK\n');
+
+
+function compiler = resolve_compiler(pkgDir, architecture)
+% Read the MEX compiler for this architecture from the package's mip.yaml.
+%
+% A build entry may carry an optional `compiler` field: a mapping from
+% architecture name to compiler name (e.g. compiler.windows_x86_64: msvc).
+% Architectures not listed -- and packages with no `compiler` field -- use
+% the architecture default baked into setup_mex_compilers. Returns '' to
+% mean "use the default".
+    compiler = '';
+    mipConfig = mip.config.read_mip_yaml(pkgDir);
+    [buildEntry, effectiveArch] = mip.build.match_build(mipConfig, architecture);
+    resolved = mip.build.resolve_build_config(mipConfig, buildEntry);
+    if ~isfield(resolved, 'compiler')
+        return
+    end
+    spec = resolved.compiler;
+    if ~isstruct(spec)
+        error('mip:bundleOne:badCompiler', ...
+              ['mip.yaml build "compiler" must be a mapping from architecture ' ...
+               'to compiler name (e.g. "compiler:\n  windows_x86_64: msvc").']);
+    end
+    if isfield(spec, effectiveArch)
+        compiler = spec.(effectiveArch);
+    end
+end

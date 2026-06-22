@@ -428,8 +428,9 @@ The script:
 ### Build environment
 
 The MEX toolchain is selected by
-[`scripts/setup_mex_compilers.m`](scripts/setup_mex_compilers.m) before
-`compile.m` runs (so a plain `mex(...)` call uses the right compiler):
+[`scripts/setup_mex_compilers.m`](scripts/setup_mex_compilers.m) (run by the
+framework before `compile.m`, so a plain `mex(...)` call uses the right
+compiler — `compile.m` must **not** call it itself):
 
 - **Linux** builds run in the `mathworks/matlab-deps:r2022a-ubi8` container
   with `gcc-toolset-10`, pinning the glibc floor to 2.28 for portability across
@@ -438,6 +439,24 @@ The MEX toolchain is selected by
 - **Windows** builds use MinGW-w64 8.1.0 with MATLAB's static-linking
   `mingw64.xml`; CMake-based packages can use vcpkg (see
   [vcpkg-triplets/](vcpkg-triplets/)).
+
+Per-architecture defaults: `gcc` (Linux/macOS), `mingw` (Windows). To override
+a default — e.g. Apple Clang on macOS or MSVC on Windows — add a `compiler`
+mapping (architecture → compiler name) to the relevant build entry in
+`mip.yaml`; architectures you don't list keep the default:
+
+```yaml
+builds:
+  - architectures: [macos_arm64, linux_x86_64, windows_x86_64]
+    compile_script: compile.m
+    compiler:
+      macos_arm64: clang     # linux_x86_64 omitted → default gcc
+      windows_x86_64: msvc
+```
+
+Supported per architecture: `linux_x86_64` → `gcc`; `macos_*` → `gcc`, `clang`;
+`windows_x86_64` → `mingw`, `msvc`. See
+[gptoolbox/mip.yaml](packages/gptoolbox/master/mip.yaml) for a worked example.
 
 ### Patterns from existing packages
 
