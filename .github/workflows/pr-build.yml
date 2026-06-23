@@ -1,0 +1,193 @@
+name: PR build command
+
+# Admin-triggered, no-publish build of a pull request's affected packages.
+#
+# When an admin (write+ on the repo) comments `/build` on a PR, this dispatches
+# `build-package.yml` for each (package, architecture) pair the PR touches — on
+# the PR's head branch and with `publish=false`, so each package is built and
+# tested but nothing is uploaded to Releases or the channel index. Lets
+# maintainers try a PR's package (download the build artifact .mhl) before merge.
+#
+#   /build                  build every (package, arch) pair the PR touches
+#   /build <arch> [<arch>]  restrict to those architectures
+#
+# Same-repo PRs only: a fork's head branch is not a valid workflow_dispatch ref.
+#
+# Reusable workflow: a channel's thin `pr-build.yml` caller (which owns the
+# issue_comment trigger) invokes this with `secrets: inherit`.
+
+on:
+  workflow_call:
+
+jobs:
+  pr-build:
+    # A PR comment (issues with .pull_request set), by an admin (write+), whose
+    # body mentions `/build`. The coarse `contains` gate is refined to an exact
+    # command line in the "Parse" step below.
+    if: >-
+      github.event.issue.pull_request != null &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      contains(github.event.comment.body, '/build')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      actions: write
+      contents: read
+    steps:
+      - name: Parse /build command
+        id: cmd
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          # Require a line that is `/build`, optionally followed by arguments
+          # (architecture keywords). A bare mention inside prose does not count.
+          line=$(printf '%s\n' "$COMMENT_BODY" | tr -d '\r' \
+            | grep -iE '^[[:space:]]*/build([[:space:]]|$)' | head -n1 || true)
+          if [ -z "$line" ]; then
+            echo "No '/build' command line — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Everything after /build = optional architecture filter (space-list).
+          args=$(printf '%s' "$line" | sed -E 's@^[[:space:]]*/build[[:space:]]*@@; s@[[:space:]]+$@@')
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "arch_filter=$args" >> "$GITHUB_OUTPUT"
+          echo "Parsed /build (arch filter: '${args:-<none>}')"
+
+      - name: Get PR metadata
+        id: pr
+        if: steps.cmd.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json headRefName,headRefOid,baseRefName,isCrossRepository)
+          get() { printf '%s' "$json" | python3 -c "import json,sys;print(json.load(sys.stdin)['$1'])"; }
+          {
+            echo "cross=$(get isCrossRepository)"
+            echo "head_ref=$(get headRefName)"
+            echo "head_sha=$(get headRefOid)"
+            echo "base_ref=$(get baseRefName)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Reject fork PRs
+        if: steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'True'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
+            "⚠️ \`/build\` only works on same-repo PR branches — a fork's head branch can't be used as a \`workflow_dispatch\` ref. Push the branch to this repo to build it."
+          exit 1
+
+      - name: Checkout PR head
+        if: steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'False'
+        uses: actions/checkout@v5
+        with:
+          # The exact commit the comment was made against. fetch-depth: 0 brings
+          # all branches/tags so the base branch is available for the diff below.
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        if: steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'False'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        if: steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'False'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        if: steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'False'
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Resolve affected builds
+        id: resolve
+        if: steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'False'
+        env:
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          ARCH_FILTER: ${{ steps.cmd.outputs.arch_filter }}
+        run: |
+          mkdir -p .ci-tmp
+          # The PR's own changes: head since its merge-base with the target branch.
+          git diff --name-only "origin/${BASE_REF}...${HEAD_SHA}" -- packages/ \
+            > .ci-tmp/changed.txt
+          echo "Changed files under packages/:"; sed 's/^/  /' .ci-tmp/changed.txt || true
+          python3 -m mip_channel_tools affected \
+            --changed-files .ci-tmp/changed.txt \
+            --dispatch-file .ci-tmp/dispatch.tsv \
+            --repo-root .
+          # Optional architecture filter from the command args.
+          if [ -n "$ARCH_FILTER" ]; then
+            awk -v f="$ARCH_FILTER" 'BEGIN{n=split(f,a," ");for(i=1;i<=n;i++)keep[a[i]]=1} keep[$2]' \
+              .ci-tmp/dispatch.tsv > .ci-tmp/filtered.tsv
+            mv .ci-tmp/filtered.tsv .ci-tmp/dispatch.tsv
+          fi
+          if [ -s .ci-tmp/dispatch.tsv ]; then
+            echo "n_dispatches=$(wc -l < .ci-tmp/dispatch.tsv)" >> "$GITHUB_OUTPUT"
+            echo "resolved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch no-publish builds
+        id: dispatch
+        if: steps.resolve.outputs.resolved == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        run: |
+          failed=0
+          : > .ci-tmp/dispatched.md
+          while IFS=$'\t' read -r pkg arch; do
+            [ -z "$pkg" ] && continue
+            echo "Dispatching (no-publish): $pkg ($arch) on $HEAD_REF"
+            if gh workflow run build-package.yml --repo "$REPO" --ref "$HEAD_REF" \
+                -f package_path="$pkg" \
+                -f architecture="$arch" \
+                -f publish=false \
+                -f force=true; then
+              printf -- '- `%s` (`%s`)\n' "$pkg" "$arch" >> .ci-tmp/dispatched.md
+            else
+              printf -- '- `%s` (`%s`) — FAILED to dispatch\n' "$pkg" "$arch" >> .ci-tmp/dispatched.md
+              failed=1
+            fi
+          done < .ci-tmp/dispatch.tsv
+          exit "$failed"
+
+      - name: Comment results
+        if: always() && steps.cmd.outputs.proceed == 'true' && steps.pr.outputs.cross == 'False'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          RESOLVED: ${{ steps.resolve.outputs.resolved }}
+          N_DISPATCHES: ${{ steps.resolve.outputs.n_dispatches }}
+          DISPATCH_RESULT: ${{ steps.dispatch.outcome }}
+          ARCH_FILTER: ${{ steps.cmd.outputs.arch_filter }}
+        run: |
+          actions_url="https://github.com/${REPO}/actions/workflows/build-package.yml?query=branch%3A${HEAD_REF}"
+          if [ "$RESOLVED" = "true" ] && [ "$DISPATCH_RESULT" = "success" ]; then
+            body="🔧 Dispatched ${N_DISPATCHES} **no-publish** build(s) on \`${HEAD_REF}\`:"$'\n\n'"$(cat .ci-tmp/dispatched.md)"$'\n\n'"Nothing is uploaded to Releases or the index. When a run finishes, download its \`bundled-<arch>\` artifact and \`mip install ./<pkg>.mhl\` to try it. [Runs ›](${actions_url})"
+          elif [ "$RESOLVED" != "true" ]; then
+            if [ -n "$ARCH_FILTER" ]; then
+              body="No \`(package, architecture)\` pairs matched \`${ARCH_FILTER}\` among the packages this PR changes."
+            else
+              body="No packages affected — this PR changes nothing under \`packages/\`, so there is nothing to build."
+            fi
+          else
+            body="Some dispatches failed:"$'\n\n'"$(cat .ci-tmp/dispatched.md)"$'\n\n'"(A dispatch fails if the PR branch's \`build-package.yml\` predates the \`publish\` input — merge \`main\` into the branch.) See the workflow run for details."
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$body"
