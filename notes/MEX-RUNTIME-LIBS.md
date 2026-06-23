@@ -5,12 +5,17 @@ symbol versions (`libstdc++`/`libgfortran` ABI, `glibc` floor) a Linux MEX may
 require. This note covers the next question: of the shared libraries a MEX
 actually pulls in, which ones we **ship** next to it and which we leave to be
 resolved at runtime — and the one design decision in
-`scripts/bundle_runtime_libs.m` that most often looks like a bug but is not:
+`mip.build.bundle_runtime_libs` that most often looks like a bug but is not:
 **bundling is deliberately non-recursive.**
+
+> The bundling code now lives in the **mip framework** under `mip.build.*` and
+> runs automatically for every MEX during `mip.bundle`. It formerly lived here as
+> `scripts/bundle_runtime_libs.m` and was called per-package from `compile.m`;
+> this note still describes its design.
 
 ## TL;DR
 
-- `bundle_runtime_libs.m` scans only the **MEX's own** `NEEDED` entries, copies
+- `mip.build.bundle_runtime_libs` scans only the **MEX's own** `NEEDED` entries, copies
   the non-system, non-MATLAB ones next to the MEX, and sets an `$ORIGIN` RPATH.
   It does **not** recurse into the `NEEDED` entries of the libs it copies.
 - A bundled lib's own transitive dependencies are expected to be satisfied at
@@ -122,7 +127,7 @@ something we bundle. If such a package appears:
    libs MATLAB already provides and risk ABI clashes with MATLAB's own.
 2. Then make `bundle_linux` walk each copied lib's `NEEDED` entries to a
    fixpoint. The per-lib `$ORIGIN` RPATH stamping is already handled by
-   `copy_and_sanitize_lib`, so the libs would find their siblings in the bundle
+   `mip.build.copy_and_sanitize_lib`, so the libs would find their siblings in the bundle
    directory — recursion is the only missing piece.
 
 Until then, the non-recursive scan is the correct behavior; do not "fix" it.
