@@ -13,7 +13,7 @@ This was extracted from the channel repos (it previously lived under their
 
 - `.github/workflows/` — **reusable workflows** (`workflow_call`) that channels
   invoke: `build-package`, `assemble-index`, `push-build`, `scheduled-build`,
-  `build-request`.
+  `build-request`, `submit-package-request`.
 - `src/mip_channel_tools/` — the `mip-channel` CLI (Python package).
 - `scripts/` — MATLAB build helpers (`bundle_one.m`, `test_one.m`, ...).
 - `mexopts/` — MEX compiler configs per architecture.
@@ -38,6 +38,9 @@ mip-channel upload [--mhl build/bundled/<file>.mhl]
 mip-channel assemble-index [--repo-root .]
 mip-channel build-request validate --output-file <path> [--title-file <path>]
 mip-channel build-request apply --dispatch-file <path> [--errors-file <path>]
+mip-channel submit-package-request validate --output-file <path> [--title-file <path>]
+mip-channel submit-package-request resolve --dispatch-file <path> [--errors-file <path>] [--for-promotion]
+mip-channel submit-package-request spec --output-file <path>
 mip-channel affected --changed-files <path> --dispatch-file <path>
 mip-channel scheduled-check --dispatch-file <path> [--summary-file <path>]
 ```

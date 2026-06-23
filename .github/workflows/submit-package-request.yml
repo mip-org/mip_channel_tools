@@ -1,0 +1,412 @@
+name: Submit package request
+
+# Cross-channel package submission, driven by a GitHub issue.
+#
+# A submitter opens an issue whose TITLE names a package release in another
+# channel repo:
+#
+#     submit <owner>/<channel>/<name>@<release>
+#
+# e.g. `submit mip-org/staging/fmm2d@main` proposes `packages/fmm2d/main`
+# from `mip-org/mip-staging`. The flow:
+#
+#   1. On open, `validate` confirms the source repo has that package
+#      (a `source.yaml`) and posts admin instructions. The body is free-form.
+#   2. An admin comments `build` (own line): test builds run for every declared
+#      architecture via `build-package.yml` with `source_repo=<owner>/mip-<channel>`
+#      and `upload=false` — full build+test, but nothing is published; the .mhl
+#      is only a downloadable artifact. The issue stays open.
+#   3. An admin comments `accept` (own line): the package folder is copied onto
+#      this channel's `main`, then the real (publishing) builds are dispatched,
+#      and the issue is closed.
+#
+# "admin" == write+ on this repo (OWNER/MEMBER/COLLABORATOR).
+
+on:
+  workflow_call:
+
+jobs:
+  validate:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Verify issue title
+        id: check
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          title_lower=$(printf '%s' "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]')
+          if printf '%s' "$title_lower" | grep -qE '^[[:space:]]*submit($|[^a-z])'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Title does not start with 'submit' — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        if: steps.check.outputs.proceed == 'true'
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Build validation comment
+        if: steps.check.outputs.proceed == 'true'
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .ci-tmp
+          auto_approved=""
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR) auto_approved="--auto-approved" ;;
+          esac
+          python3 -m mip_channel_tools submit-package-request validate \
+            --output-file .ci-tmp/comment.md \
+            --title-file .ci-tmp/title.txt \
+            $auto_approved
+
+      - name: Post validation comment
+        if: steps.check.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body-file .ci-tmp/comment.md
+
+      - name: Rewrite title to canonical form
+        if: steps.check.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CURRENT_TITLE: ${{ github.event.issue.title }}
+        run: |
+          if [ ! -s .ci-tmp/title.txt ]; then
+            echo "No canonical title — leaving title alone."
+            exit 0
+          fi
+          new_title=$(head -n1 .ci-tmp/title.txt)
+          if [ "$CURRENT_TITLE" = "$new_title" ]; then
+            echo "Title already canonical."
+            exit 0
+          fi
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --title "$new_title"
+
+  build-on-command:
+    # An admin comments `build` on a submission issue -> dispatch test builds.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: write
+      contents: read
+    steps:
+      - name: Verify trigger conditions
+        id: check
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          title_lower=$(printf '%s' "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]')
+          if ! printf '%s' "$title_lower" | grep -qE '^[[:space:]]*submit($|[^a-z])'; then
+            echo "Title is not a submission — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! printf '%s\n' "$COMMENT_BODY" | tr -d '\r' \
+              | grep -iqE '^[[:space:]]*build[[:space:]]*$'; then
+            echo "Comment is not 'build' on its own line — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        if: steps.check.outputs.proceed == 'true'
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Resolve submission
+        if: steps.check.outputs.proceed == 'true'
+        id: resolve
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .ci-tmp
+          if ! python3 -m mip_channel_tools submit-package-request resolve \
+              --dispatch-file .ci-tmp/dispatch.tsv \
+              --errors-file .ci-tmp/errors.md; then
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -s .ci-tmp/dispatch.tsv ]; then
+            echo "n_dispatches=$(wc -l < .ci-tmp/dispatch.tsv)" >> "$GITHUB_OUTPUT"
+            echo "resolved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch test builds
+        if: steps.check.outputs.proceed == 'true' && steps.resolve.outputs.resolved == 'true'
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          failed=0
+          : > .ci-tmp/dispatched.md
+          while IFS=$'\t' read -r pkg_path arch source_repo; do
+            [ -z "$pkg_path" ] && continue
+            echo "Dispatching test build: $pkg_path ($arch) from $source_repo"
+            if gh workflow run build-package.yml --repo "$REPO" \
+                -f package_path="$pkg_path" \
+                -f architecture="$arch" \
+                -f force=false \
+                -f source_repo="$source_repo" \
+                -f upload=false; then
+              printf -- '- `%s` (`%s`) from `%s`\n' "$pkg_path" "$arch" "$source_repo" >> .ci-tmp/dispatched.md
+            else
+              printf -- '- `%s` (`%s`) — FAILED to dispatch\n' "$pkg_path" "$arch" >> .ci-tmp/dispatched.md
+              failed=1
+            fi
+          done < .ci-tmp/dispatch.tsv
+          exit "$failed"
+
+      - name: Report back to issue
+        if: always() && steps.check.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RESOLVED: ${{ steps.resolve.outputs.resolved }}
+          N_DISPATCHES: ${{ steps.resolve.outputs.n_dispatches }}
+          DISPATCH_RESULT: ${{ steps.dispatch.outcome }}
+        run: |
+          if [ "$RESOLVED" = "true" ] && [ "$DISPATCH_RESULT" = "success" ]; then
+            list=$(cat .ci-tmp/dispatched.md 2>/dev/null || true)
+            body="Dispatched ${N_DISPATCHES} test build(s) (no release — download the \`.mhl\` artifact from each run to test locally):"$'\n\n'"$list"$'\n\n'"See the [Actions tab](https://github.com/${REPO}/actions/workflows/build-package.yml). Comment \`accept\` to promote into this channel."
+          elif [ "$RESOLVED" != "true" ]; then
+            errors=$(cat .ci-tmp/errors.md 2>/dev/null || true)
+            body=$'Cannot dispatch — submission did not resolve:\n\n'"$errors"
+          else
+            partial=$(cat .ci-tmp/dispatched.md 2>/dev/null || true)
+            body=$'Some dispatches failed:\n\n'"$partial"$'\n\nSee the workflow run for details.'
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "$body"
+
+  promote-on-command:
+    # An admin comments `accept` -> copy the package onto main and run the real
+    # (publishing) builds.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: write
+      contents: write
+    steps:
+      - name: Verify trigger conditions
+        id: check
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          title_lower=$(printf '%s' "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]')
+          if ! printf '%s' "$title_lower" | grep -qE '^[[:space:]]*submit($|[^a-z])'; then
+            echo "Title is not a submission — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! printf '%s\n' "$COMMENT_BODY" | tr -d '\r' \
+              | grep -iqE '^[[:space:]]*accept[[:space:]]*$'; then
+            echo "Comment is not 'accept' on its own line — skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout this channel (main)
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Set up Python
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        if: steps.check.outputs.proceed == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        if: steps.check.outputs.proceed == 'true'
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Resolve submission spec
+        if: steps.check.outputs.proceed == 'true'
+        id: spec
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .ci-tmp
+          if ! python3 -m mip_channel_tools submit-package-request spec \
+              --output-file .ci-tmp/spec.txt; then
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          while IFS='=' read -r k v; do
+            printf '%s=%s\n' "$k" "$v" >> "$GITHUB_OUTPUT"
+          done < .ci-tmp/spec.txt
+          # The real (publishing) build dispatch list: same arches, but built
+          # from this channel's own tree (empty source_repo, upload default).
+          if python3 -m mip_channel_tools submit-package-request resolve \
+              --dispatch-file .ci-tmp/dispatch.tsv \
+              --errors-file .ci-tmp/errors.md \
+              --for-promotion; then
+            echo "resolved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Copy package from source repo
+        if: steps.check.outputs.proceed == 'true' && steps.spec.outputs.resolved == 'true'
+        id: copy
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.spec.outputs.source_repo }}
+          path: _src
+
+      - name: Commit package onto main
+        if: steps.check.outputs.proceed == 'true' && steps.spec.outputs.resolved == 'true'
+        id: commit
+        env:
+          PACKAGE_PATH: ${{ steps.spec.outputs.package_path }}
+          SOURCE_REPO: ${{ steps.spec.outputs.source_repo }}
+        run: |
+          src="_src/$PACKAGE_PATH"
+          if [ ! -d "$src" ]; then
+            echo "::error::$PACKAGE_PATH not found in $SOURCE_REPO"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # Replace the destination folder wholesale: if this name/release was
+          # promoted before, the previous contents are removed first so stale
+          # files cannot survive (the source folder is the single source of
+          # truth). The source repo's .git lives at _src/.git, outside the
+          # package folder, so it is not copied.
+          rm -rf "$PACKAGE_PATH"
+          mkdir -p "$(dirname "$PACKAGE_PATH")"
+          cp -a "$src" "$PACKAGE_PATH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # -A so any files removed by the replacement are staged as deletions.
+          git add -A "$PACKAGE_PATH"
+          if git diff --cached --quiet; then
+            echo "No changes — package already present and identical."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Promote $PACKAGE_PATH from $SOURCE_REPO"
+            git push origin main
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch publishing builds
+        if: steps.check.outputs.proceed == 'true' && steps.spec.outputs.resolved == 'true'
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # A push made with GITHUB_TOKEN does not trigger push-build.yml, so
+          # dispatch the real builds explicitly (upload defaults to true).
+          failed=0
+          : > .ci-tmp/dispatched.md
+          while IFS=$'\t' read -r pkg_path arch _; do
+            [ -z "$pkg_path" ] && continue
+            echo "Dispatching build: $pkg_path ($arch)"
+            if gh workflow run build-package.yml --repo "$REPO" \
+                -f package_path="$pkg_path" \
+                -f architecture="$arch" \
+                -f force=false; then
+              printf -- '- `%s` (`%s`)\n' "$pkg_path" "$arch" >> .ci-tmp/dispatched.md
+            else
+              printf -- '- `%s` (`%s`) — FAILED to dispatch\n' "$pkg_path" "$arch" >> .ci-tmp/dispatched.md
+              failed=1
+            fi
+          done < .ci-tmp/dispatch.tsv
+          exit "$failed"
+
+      - name: Report and close
+        if: always() && steps.check.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RESOLVED: ${{ steps.spec.outputs.resolved }}
+          PACKAGE_PATH: ${{ steps.spec.outputs.package_path }}
+          SOURCE_REPO: ${{ steps.spec.outputs.source_repo }}
+          COMMITTED: ${{ steps.commit.outputs.committed }}
+          DISPATCH_RESULT: ${{ steps.dispatch.outcome }}
+        run: |
+          if [ "$RESOLVED" != "true" ]; then
+            errors=$(cat .ci-tmp/errors.md 2>/dev/null || true)
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body $'Cannot promote — submission did not resolve:\n\n'"$errors"
+            exit 0
+          fi
+          if [ "$DISPATCH_RESULT" != "success" ]; then
+            partial=$(cat .ci-tmp/dispatched.md 2>/dev/null || true)
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body $'Promotion incomplete — some builds failed to dispatch:\n\n'"$partial"
+            exit 0
+          fi
+          list=$(cat .ci-tmp/dispatched.md 2>/dev/null || true)
+          if [ "$COMMITTED" = "true" ]; then
+            head="Promoted \`$PACKAGE_PATH\` from \`$SOURCE_REPO\` onto \`main\` and dispatched publishing build(s):"
+          else
+            head="\`$PACKAGE_PATH\` was already present on \`main\`; dispatched publishing build(s):"
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body "$head"$'\n\n'"$list"
+          gh issue close "$ISSUE_NUMBER" --repo "$REPO" --reason completed

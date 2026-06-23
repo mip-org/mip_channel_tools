@@ -105,6 +105,19 @@ def list_all_packages(repo_root):
     return pkgs
 
 
+def arches_from_mip_config(config):
+    """Arches declared in a parsed mip.yaml, intersected with the supported set.
+
+    Returns a list ordered by SUPPORTED_ARCHITECTURES. Drops architectures the
+    channel does not support (e.g. `macos_x86_64`).
+    """
+    declared = set()
+    for build in (config.get("builds") or []):
+        for a in (build.get("architectures") or []):
+            declared.add(a)
+    return [a for a in SUPPORTED_ARCHITECTURES if a in declared]
+
+
 def arches_from_mip_yaml(pkg_dir):
     """Arches declared in mip.yaml, intersected with SUPPORTED_ARCHITECTURES.
 
@@ -117,11 +130,7 @@ def arches_from_mip_yaml(pkg_dir):
         return []
     with open(mip_yaml) as f:
         config = yaml.safe_load(f) or {}
-    declared = set()
-    for build in (config.get("builds") or []):
-        for a in (build.get("architectures") or []):
-            declared.add(a)
-    return [a for a in SUPPORTED_ARCHITECTURES if a in declared]
+    return arches_from_mip_config(config)
 
 
 def parse_issue(body, repo_root):
