@@ -15,6 +15,7 @@ from . import (
     package_setup,
     prepare,
     scheduled,
+    submit_package_request,
     upload,
 )
 
@@ -31,6 +32,7 @@ def main(argv=None):
     upload.register(subparsers)
     index.register(subparsers)
     build_request.register(subparsers)
+    submit_package_request.register(subparsers)
     affected.register(subparsers)
     scheduled.register(subparsers)
     download_stats.register(subparsers)
