@@ -76,9 +76,11 @@ jobs:
           esac
           python3 -m mip_channel_tools submit-package-request validate \
             --output-file .ci-tmp/comment.md \
-            --title-file .ci-tmp/title.txt \
             $auto_approved
 
+      # The issue title is left exactly as the submitter wrote it: the `build`
+      # and `accept` commands re-parse it as `submit <owner>/<channel>/<name>@<release>`,
+      # so rewriting it (even to a "canonical" form) would break resolution.
       - name: Post validation comment
         if: steps.check.outputs.proceed == 'true'
         env:
@@ -88,25 +90,6 @@ jobs:
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
             --body-file .ci-tmp/comment.md
-
-      - name: Rewrite title to canonical form
-        if: steps.check.outputs.proceed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          CURRENT_TITLE: ${{ github.event.issue.title }}
-        run: |
-          if [ ! -s .ci-tmp/title.txt ]; then
-            echo "No canonical title — leaving title alone."
-            exit 0
-          fi
-          new_title=$(head -n1 .ci-tmp/title.txt)
-          if [ "$CURRENT_TITLE" = "$new_title" ]; then
-            echo "Title already canonical."
-            exit 0
-          fi
-          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --title "$new_title"
 
   build-on-command:
     # An admin comments `build` on a submission issue -> dispatch test builds.

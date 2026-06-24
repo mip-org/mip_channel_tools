@@ -155,11 +155,8 @@ def test_validate_comment_not_found(tmp_path, monkeypatch):
     monkeypatch.setenv("ISSUE_TITLE", "submit mip-org/staging/ghost@main")
     monkeypatch.setattr(sr, "remote_package_exists", lambda spec: False)
     out = tmp_path / "c.md"
-    title = tmp_path / "t.txt"
-    sr.cmd_validate(_Args(
-        output_file=str(out), title_file=str(title), auto_approved=False))
+    sr.cmd_validate(_Args(output_file=str(out), auto_approved=False))
     assert "was not found" in out.read_text()
-    assert title.read_text().startswith("Submit:")
 
 
 def test_validate_comment_ok_lists_arches_and_commands(tmp_path, monkeypatch):
@@ -168,8 +165,7 @@ def test_validate_comment_ok_lists_arches_and_commands(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sr, "remote_arches", lambda spec: (["linux_x86_64"], None))
     out = tmp_path / "c.md"
-    sr.cmd_validate(_Args(
-        output_file=str(out), title_file=None, auto_approved=True))
+    sr.cmd_validate(_Args(output_file=str(out), auto_approved=True))
     body = out.read_text()
     assert "linux_x86_64" in body
     assert "`build`" in body

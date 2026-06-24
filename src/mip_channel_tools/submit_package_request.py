@@ -27,8 +27,9 @@ The flow (driven by the `submit-package-request.yml` workflow):
 
 Subcommands:
 
-    submit-package-request validate --output-file PATH [--title-file PATH]
-        Render the comment to post on issue-open (and a canonical title).
+    submit-package-request validate --output-file PATH
+        Render the comment to post on issue-open. The issue title is left
+        as the submitter wrote it (it must stay parseable as a submission).
 
     submit-package-request resolve --dispatch-file PATH [--errors-file PATH] [--for-promotion]
         Re-parse the title and write one TSV row per architecture
@@ -214,20 +215,11 @@ def render_validation_comment(spec, exists, arches, arch_error,
     return "\n".join(lines) + "\n"
 
 
-def canonical_title(spec):
-    return (
-        f"Submit: `{spec['owner']}/{spec['channel']}/"
-        f"{spec['name']}@{spec['release']}`"
-    )
-
-
 def cmd_validate(args):
     title = get_title()
     spec = parse_submit_title(title)
     if spec is None:
         Path(args.output_file).write_text(render_invalid_comment())
-        if args.title_file:
-            Path(args.title_file).write_text("")
         return 0
 
     exists = remote_package_exists(spec)
@@ -239,8 +231,6 @@ def cmd_validate(args):
         render_validation_comment(
             spec, exists, arches, arch_error, args.auto_approved)
     )
-    if args.title_file:
-        Path(args.title_file).write_text(canonical_title(spec) + "\n")
     return 0
 
 
@@ -300,7 +290,6 @@ def register(subparsers):
 
     v = sub.add_parser("validate")
     v.add_argument("--output-file", required=True)
-    v.add_argument("--title-file", default=None)
     v.add_argument(
         "--auto-approved", action="store_true",
         help="Issue author is an admin, so phrase instructions accordingly.")
