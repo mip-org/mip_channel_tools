@@ -38,7 +38,7 @@ mip-channel upload [--mhl build/bundled/<file>.mhl]
 mip-channel assemble-index [--repo-root .]
 mip-channel build-request validate --output-file <path> [--title-file <path>]
 mip-channel build-request apply --dispatch-file <path> [--errors-file <path>]
-mip-channel submit-package-request validate --output-file <path> [--title-file <path>]
+mip-channel submit-package-request validate --output-file <path>
 mip-channel submit-package-request resolve --dispatch-file <path> [--errors-file <path>] [--for-promotion]
 mip-channel submit-package-request spec --output-file <path>
 mip-channel affected --changed-files <path> --dispatch-file <path>
