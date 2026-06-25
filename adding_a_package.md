@@ -109,8 +109,12 @@ Things to determine:
    - `macos_arm64`
    - `windows_x86_64`
 
-   (`macos_x86_64` is **not** a supported channel architecture.) Most C/C++
-   MEX builds work on all three; Fortran or CUDA may be more restrictive.
+   (`macos_x86_64` (Intel Mac) is **not** a supported channel architecture:
+   MathWorks has [removed Intel-Mac support from `mpm`](https://github.com/mathworks-ref-arch/matlab-dockerfile/blob/main/MPM.md),
+   the installer the CI uses to set up MATLAB, so MATLAB can no longer be
+   installed on an Intel-macOS runner. `macos_arm64` (Apple Silicon) is the
+   only macOS target.) Most C/C++ MEX builds work on all three; Fortran or
+   CUDA may be more restrictive.
 
    **Don't reuse upstream's pre-compiled binaries.** Some upstream repos ship
    `.mexa64` / `.mexmaca64` / `.mexw64` files alongside the source. We don't
