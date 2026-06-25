@@ -41,14 +41,23 @@ def _rmtree_on_error(func, path, exc_info):
     func(path)
 
 
-def clone_git_repository(url, destination, subdirectory=None, branch=None):
-    """Clone a git repository, optionally extracting a subdirectory."""
-    branch_args = ["--branch", branch] if branch else []
+def clone_git_repository(url, destination, subdirectory=None, branch=None,
+                         submodules=False):
+    """Clone a git repository, optionally extracting a subdirectory.
+
+    When `submodules` is set, the clone recurses into git submodules so their
+    working trees are populated (needed by sources whose build descends into a
+    submodule, e.g. fmm3dbie's vendored FMM3D)."""
+    clone_args = []
+    if branch:
+        clone_args += ["--branch", branch]
+    if submodules:
+        clone_args += ["--recurse-submodules"]
     if subdirectory:
         temp_clone_dir = destination + "_temp_clone"
         print(f'  Cloning {url} (subdirectory: {subdirectory})...')
         subprocess.run(
-            ["git", "clone"] + branch_args + [url, temp_clone_dir],
+            ["git", "clone"] + clone_args + [url, temp_clone_dir],
             check=True, capture_output=True
         )
         subdir_path = os.path.join(temp_clone_dir, subdirectory)
@@ -70,15 +79,20 @@ def clone_git_repository(url, destination, subdirectory=None, branch=None):
     else:
         print(f'  Cloning {url}...')
         subprocess.run(
-            ["git", "clone"] + branch_args + [url, destination],
+            ["git", "clone"] + clone_args + [url, destination],
             check=True, capture_output=True
         )
 
-    for root, dirs, _ in os.walk(destination):
+    for root, dirs, files in os.walk(destination):
         if ".git" in dirs:
             shutil.rmtree(os.path.join(root, ".git"),
                           onerror=_rmtree_on_error)
             dirs.remove(".git")
+        # Submodule working trees carry a .git *file* (a gitlink pointing into
+        # the parent's .git/modules); drop those too so no .git remnants leak
+        # into the source hash.
+        if ".git" in files:
+            os.remove(os.path.join(root, ".git"))
 
 
 def download_and_extract_zip(url, destination):
@@ -275,6 +289,7 @@ def fetch_source(recipe, target_dir):
                 destination='.',
                 subdirectory=source.get('subdirectory'),
                 branch=source.get('branch'),
+                submodules=source.get('submodules', False),
             )
         elif 'zip' in source:
             download_and_extract_zip(source['zip'], '.')
