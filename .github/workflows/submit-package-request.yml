@@ -171,6 +171,16 @@ jobs:
         run: |
           failed=0
           : > .ci-tmp/dispatched.md
+          : > .ci-tmp/install-cmds.md
+          # Target channel spec (<owner>/<channel>) for the channel this issue
+          # lives in. The channel repo is mip-<channel>, so the channel name drops
+          # that prefix (mip-org/mip-core -> mip-org/core). Passing --channel on
+          # the local install resolves the package's dependencies against THIS
+          # channel's index, so a dependency on another package already published
+          # here is found instead of erroring against the default channel.
+          owner=${REPO%%/*}
+          reponame=${REPO##*/}
+          channel="${owner}/${reponame#mip-}"
           while IFS=$'\t' read -r pkg_path arch source_repo; do
             [ -z "$pkg_path" ] && continue
             echo "Dispatching test build: $pkg_path ($arch) from $source_repo"
@@ -181,6 +191,25 @@ jobs:
                 -f source_repo="$source_repo" \
                 -f publish=false; then
               printf -- '- `%s` (`%s`) from `%s`\n' "$pkg_path" "$arch" "$source_repo" >> .ci-tmp/dispatched.md
+              # Predicted local install+load for this build, one fenced block per
+              # arch. The .mhl lands in the _test-builds prerelease as
+              # <name>-<version>-<arch>.mhl (the package name's '-' encoded as '_'
+              # by mip bundle; version = release-dir name = last path segment).
+              # --channel installs it under the channel namespace
+              # (gh/<owner>/<channel>/<name>) and resolves dependencies from that
+              # channel, so the load FQN is <owner>/<channel>/<name>. The folder
+              # name is the canonical package name; mip resolves it
+              # -/_-insensitively.
+              name=$(basename "$(dirname "$pkg_path")")
+              release=$(basename "$pkg_path")
+              mhl="${name//-/_}-${release}-${arch}.mhl"
+              {
+                printf -- '**`%s`**\n' "$arch"
+                printf '```\n'
+                printf 'mip install --channel %s https://github.com/%s/releases/download/_test-builds/%s\n' "$channel" "$REPO" "$mhl"
+                printf 'mip load %s/%s\n' "$channel" "$name"
+                printf '```\n\n'
+              } >> .ci-tmp/install-cmds.md
             else
               printf -- '- `%s` (`%s`) — FAILED to dispatch\n' "$pkg_path" "$arch" >> .ci-tmp/dispatched.md
               failed=1
@@ -200,7 +229,8 @@ jobs:
         run: |
           if [ "$RESOLVED" = "true" ] && [ "$DISPATCH_RESULT" = "success" ]; then
             list=$(cat .ci-tmp/dispatched.md 2>/dev/null || true)
-            body="Dispatched ${N_DISPATCHES} test build(s):"$'\n\n'"$list"$'\n\n'"As each build finishes, its \`.mhl\` is published to the [\`_test-builds\` prerelease](https://github.com/${REPO}/releases/tag/_test-builds) with a direct download URL you can \`mip install\` locally (it is **not** added to the channel index). See the [Actions tab](https://github.com/${REPO}/actions/workflows/build-package.yml) for progress. Comment \`accept\` to promote into this channel."
+            cmds=$(cat .ci-tmp/install-cmds.md 2>/dev/null || true)
+            body="Dispatched ${N_DISPATCHES} test build(s):"$'\n\n'"$list"$'\n\n'"Each build's \`.mhl\` is published to the [\`_test-builds\` prerelease](https://github.com/${REPO}/releases/tag/_test-builds) (it is **not** added to the channel index). Once a build finishes, install and load it locally (pick your architecture). \`--channel\` resolves any dependencies against this channel:"$'\n\n'"$cmds"$'\n\n'"See the [Actions tab](https://github.com/${REPO}/actions/workflows/build-package.yml) for progress. Comment \`accept\` to promote into this channel."
           elif [ "$RESOLVED" != "true" ]; then
             errors=$(cat .ci-tmp/errors.md 2>/dev/null || true)
             body=$'Cannot dispatch — submission did not resolve:\n\n'"$errors"
