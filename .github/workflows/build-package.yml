@@ -1,5 +1,5 @@
 name: Build Package
-run-name: "${{ inputs.package_path }} (${{ inputs.architecture }})${{ inputs.force && ' [force]' || '' }}${{ !inputs.upload && ' [test]' || '' }}${{ inputs.source_repo != '' && format(' [{0}]', inputs.source_repo) || '' }}"
+run-name: "${{ inputs.package_path }} (${{ inputs.architecture }})${{ inputs.force && ' [force]' || '' }}${{ !inputs.publish && ' [test]' || '' }}${{ inputs.source_repo != '' && format(' [{0}]', inputs.source_repo) || '' }}"
 
 # Per-package, per-architecture build pipeline.
 #
@@ -39,12 +39,15 @@ on:
         required: false
         type: string
         default: ''
-      upload:
-        # When false, the .mhl is built and tested but NOT published: the
-        # release-upload step and the index assemble/deploy job are skipped, so
-        # the only output is the build artifact. Used for submission test
-        # builds.
-        description: 'Publish the built .mhl as a release + reindex'
+      publish:
+        # true  (default): publish into the channel — upload the .mhl to the
+        #   package's real GitHub Release and rebuild/deploy the channel index.
+        # false (test build): the .mhl is built and tested, then uploaded to the
+        #   rolling `_test-builds` prerelease instead of the package's release,
+        #   and the index assemble/deploy job is skipped. This gives the .mhl a
+        #   direct download URL for local testing without entering the channel
+        #   index. Used for submission test builds.
+        description: 'Publish the built .mhl into the channel (real release + reindex)'
         required: false
         type: boolean
         default: true
@@ -812,20 +815,31 @@ jobs:
             sudo mv /opt/homebrew.deleted /opt/homebrew
           fi
 
-      - name: Upload to GitHub Release
-        # Skipped for submission test builds (upload=false): the .mhl is only
-        # the build artifact, never published.
-        if: inputs.upload
+      - name: Publish .mhl to GitHub Release
+        # publish=true: upload to the package's real release (the assemble +
+        #   deploy job below then rebuilds the channel index from it).
+        # publish=false (submission test build): upload to the rolling
+        #   `_test-builds` prerelease instead, giving the .mhl a direct download
+        #   URL for local testing. The index job is skipped, and `_test-builds`
+        #   is never indexed (assemble-index only indexes tags backed by a
+        #   packages/ folder in this channel).
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python -m mip_channel_tools upload
+        shell: bash
+        run: |
+          if [ "${{ inputs.publish }}" = "true" ]; then
+            python -m mip_channel_tools upload
+          else
+            python -m mip_channel_tools upload --release-tag _test-builds --prerelease
+          fi
 
   assemble-and-deploy:
     name: assemble + deploy
     needs: [build, test-and-upload]
-    # Skipped for submission test builds (upload=false): nothing was published,
-    # so the channel index/Pages must not be rebuilt.
-    if: always() && inputs.upload && needs.build.result == 'success' && (needs.test-and-upload.result == 'success' || needs.test-and-upload.result == 'skipped')
+    # Skipped for submission test builds (publish=false): the .mhl went to the
+    # `_test-builds` prerelease, not the channel, so the index/Pages must not be
+    # rebuilt.
+    if: always() && inputs.publish && needs.build.result == 'success' && (needs.test-and-upload.result == 'success' || needs.test-and-upload.result == 'skipped')
     runs-on: ubuntu-latest
     # Serialize Pages deploys across concurrent package builds.
     concurrency:

@@ -19,9 +19,10 @@ The flow (driven by the `submit-package-request.yml` workflow):
      `packages/<name>/<release>/source.yaml` and posts admin instructions.
   2. An admin comments `build`; `resolve` lists the architectures the package
      declares and the workflow dispatches `build-package.yml` per arch with
-     `source_repo=<owner>/mip-<channel>` and `upload=false` — the build/test
-     run exactly as usual but publish nothing; the `.mhl` survives only as a
-     build artifact to download and install locally.
+     `source_repo=<owner>/mip-<channel>` and `publish=false` — the build/test
+     run exactly as usual but the package is not published into the channel;
+     each `.mhl` is uploaded to the rolling `_test-builds` prerelease with a
+     direct download URL to `mip install` locally.
   3. An admin comments `accept`; the workflow copies the package folder onto
      mip-core `main`, which runs the normal build+release pipeline.
 
@@ -206,8 +207,9 @@ def render_validation_comment(spec, exists, arches, arch_error,
         "",
         "- Comment `build` (on its own line) to run **test builds** for "
         "every architecture above. Each build runs the full build+test "
-        "pipeline but publishes nothing — the resulting `.mhl` is uploaded "
-        "as a workflow artifact you can download and `mip install` locally.",
+        "pipeline but is not published into the channel — the resulting "
+        "`.mhl` is uploaded to the rolling `_test-builds` prerelease with a "
+        "direct download URL you can `mip install` locally.",
         "- Comment `accept` (on its own line) to **promote** the package: "
         "its folder is copied into this channel's `packages/` on `main`, "
         "which runs the normal build-and-release pipeline.",

@@ -12,6 +12,9 @@ Usage:
   mip-channel upload --mhl build/bundled/foo-1.0-any.mhl
   mip-channel upload        # auto-discovers the single .mhl
                             # under build/bundled/
+  mip-channel upload --release-tag _test-builds --prerelease
+                            # test build: publish to the rolling _test-builds
+                            # prerelease instead of the package's real release
 """
 
 import os
@@ -19,7 +22,7 @@ import sys
 import json
 import hashlib
 import subprocess
-from .config import get_github_repo, release_tag_from_mhl
+from .config import get_github_repo, get_base_url, release_tag_from_mhl
 
 
 def _sha256_of_file(path):
@@ -30,20 +33,20 @@ def _sha256_of_file(path):
     return h.hexdigest()
 
 
-def _ensure_release_exists(repo, release_tag):
+def _ensure_release_exists(repo, release_tag, prerelease=False):
     result = subprocess.run(
         ['gh', 'release', 'view', release_tag, '--repo', repo],
         capture_output=True, text=True
     )
     if result.returncode != 0:
         print(f"  Creating release '{release_tag}'...")
-        subprocess.run(
-            ['gh', 'release', 'create', release_tag,
-             '--repo', repo,
-             '--title', release_tag,
-             '--notes', f'Package assets for {release_tag}.'],
-            check=True
-        )
+        cmd = ['gh', 'release', 'create', release_tag,
+               '--repo', repo,
+               '--title', release_tag,
+               '--notes', f'Package assets for {release_tag}.']
+        if prerelease:
+            cmd.append('--prerelease')
+        subprocess.run(cmd, check=True)
 
 
 def _upload_file(repo, release_tag, file_path):
@@ -56,7 +59,7 @@ def _upload_file(repo, release_tag, file_path):
     print(f"  Uploaded {filename}")
 
 
-def upload_mhl(mhl_path):
+def upload_mhl(mhl_path, release_tag=None, prerelease=False):
     mhl_filename = os.path.basename(mhl_path)
     mip_json_path = f"{mhl_path}.mip.json"
     if not os.path.exists(mip_json_path):
@@ -70,13 +73,20 @@ def upload_mhl(mhl_path):
         json.dump(mip_json, f, indent=2)
     print(f"  SHA-256: {mip_json['mhl_sha256']}")
 
-    release_tag = release_tag_from_mhl(mhl_filename)
+    # A caller-supplied release_tag (e.g. the rolling `_test-builds` prerelease)
+    # overrides the per-package tag derived from the filename. Test builds
+    # publish there so the .mhl gets a direct download URL without entering the
+    # channel index (assemble-index only indexes tags backed by a packages/
+    # folder in this channel, which `_test-builds` is not).
+    if release_tag is None:
+        release_tag = release_tag_from_mhl(mhl_filename)
     repo = get_github_repo()
     print(f"Uploading {mhl_filename} -> {repo} release '{release_tag}'")
 
-    _ensure_release_exists(repo, release_tag)
+    _ensure_release_exists(repo, release_tag, prerelease=prerelease)
     _upload_file(repo, release_tag, mhl_path)
     _upload_file(repo, release_tag, mip_json_path)
+    print(f"  URL: {get_base_url(release_tag)}/{mhl_filename}")
     return True
 
 
@@ -108,7 +118,8 @@ def run(args):
         return 2
 
     try:
-        ok = upload_mhl(mhl_path)
+        ok = upload_mhl(mhl_path, release_tag=args.release_tag,
+                        prerelease=args.prerelease)
     except subprocess.CalledProcessError as e:
         print(f"Upload failed: {e}", file=sys.stderr)
         return 1
@@ -121,4 +132,14 @@ def register(subparsers):
         help="Upload a single bundled .mhl to its GitHub Release.")
     parser.add_argument(
         '--mhl', help='Path to .mhl (default: auto-discover in build/bundled)')
+    parser.add_argument(
+        '--release-tag',
+        help='Upload to this release tag instead of the per-package tag '
+             'derived from the filename. Test builds pass the rolling '
+             '`_test-builds` prerelease so the .mhl gets a direct download URL '
+             'without entering the channel index.')
+    parser.add_argument(
+        '--prerelease', action='store_true',
+        help='If the release has to be created, mark it as a prerelease '
+             '(used with --release-tag for the test-builds release).')
     parser.set_defaults(func=run)

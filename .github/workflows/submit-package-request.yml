@@ -14,8 +14,9 @@ name: Submit package request
 #      (a `source.yaml`) and posts admin instructions. The body is free-form.
 #   2. An admin comments `build` (own line): test builds run for every declared
 #      architecture via `build-package.yml` with `source_repo=<owner>/mip-<channel>`
-#      and `upload=false` — full build+test, but nothing is published; the .mhl
-#      is only a downloadable artifact. The issue stays open.
+#      and `publish=false` — full build+test, but the package is not published
+#      into the channel; each .mhl lands in the rolling `_test-builds`
+#      prerelease with a direct download URL. The issue stays open.
 #   3. An admin comments `accept` (own line): the package folder is copied onto
 #      this channel's `main`, then the real (publishing) builds are dispatched,
 #      and the issue is closed.
@@ -178,7 +179,7 @@ jobs:
                 -f architecture="$arch" \
                 -f force=false \
                 -f source_repo="$source_repo" \
-                -f upload=false; then
+                -f publish=false; then
               printf -- '- `%s` (`%s`) from `%s`\n' "$pkg_path" "$arch" "$source_repo" >> .ci-tmp/dispatched.md
             else
               printf -- '- `%s` (`%s`) — FAILED to dispatch\n' "$pkg_path" "$arch" >> .ci-tmp/dispatched.md
@@ -199,7 +200,7 @@ jobs:
         run: |
           if [ "$RESOLVED" = "true" ] && [ "$DISPATCH_RESULT" = "success" ]; then
             list=$(cat .ci-tmp/dispatched.md 2>/dev/null || true)
-            body="Dispatched ${N_DISPATCHES} test build(s) (no release — download the \`.mhl\` artifact from each run to test locally):"$'\n\n'"$list"$'\n\n'"See the [Actions tab](https://github.com/${REPO}/actions/workflows/build-package.yml). Comment \`accept\` to promote into this channel."
+            body="Dispatched ${N_DISPATCHES} test build(s):"$'\n\n'"$list"$'\n\n'"As each build finishes, its \`.mhl\` is published to the [\`_test-builds\` prerelease](https://github.com/${REPO}/releases/tag/_test-builds) with a direct download URL you can \`mip install\` locally (it is **not** added to the channel index). See the [Actions tab](https://github.com/${REPO}/actions/workflows/build-package.yml) for progress. Comment \`accept\` to promote into this channel."
           elif [ "$RESOLVED" != "true" ]; then
             errors=$(cat .ci-tmp/errors.md 2>/dev/null || true)
             body=$'Cannot dispatch — submission did not resolve:\n\n'"$errors"
