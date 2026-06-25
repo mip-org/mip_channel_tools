@@ -757,25 +757,54 @@ jobs:
         with:
           command: "addpath('mip'); addpath('mip_channel_tools/scripts'); test_one"
 
-      - name: Smoke test numbl_wasm artifact
-        # The build job already failed if emcc errored; here we confirm the .mhl
-        # ships the expected numbl glue (a .numbl.js builtin + its .wasm) and that
-        # the .wasm is a structurally valid WebAssembly module. Running the
-        # functions end-to-end requires the numbl runtime and is a follow-up
-        # (the old mip-flatironinstitute channel likewise left numbl tests off).
+      - name: Set up Node (numbl_wasm)
+        if: inputs.architecture == 'numbl_wasm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Test bundled package (numbl_wasm via numbl)
+        # numbl_wasm ships a .wasm + .numbl.js exercised by the numbl runtime,
+        # not MATLAB. Run the package's test_script exactly as a user would:
+        # install the freshly built .mhl, load it, and `mip test`. A failed
+        # assertion (or a missing/invalid .wasm) makes `numbl eval` exit nonzero
+        # and fails the job *before* the upload step below, so a broken bundle
+        # is never published. The dependency channel is derived from the repo
+        # (owner/mip-<chan> -> owner/<chan>), mirroring scripts/test_one.m.
+        #
+        # numbl runtime: built from the flatironinstitute/numbl `main` tip while
+        # the numbl features this needs are still stabilizing (local-.mhl
+        # install -> copyfile/fileattrib; maxNumCompThreads). Once a published
+        # npm release ships them, drop the build-from-source block and use the
+        # commented `npm install -g numbl` line instead.
         if: inputs.architecture == 'numbl_wasm'
         shell: bash
+        env:
+          MIP_CONFIRM: 'y'
         run: |
-          mhl=$(ls build/bundled/*.mhl | head -n1)
-          echo "Smoke-testing $mhl"
-          tmp=$(mktemp -d)
-          unzip -q "$mhl" -d "$tmp"
-          js=$(find "$tmp" -name '*.numbl.js' | head -n1)
-          wasm=$(find "$tmp" -name '*.wasm' | head -n1)
-          if [ -z "$js" ]; then echo "::error::no .numbl.js builtin in $mhl"; exit 1; fi
-          if [ -z "$wasm" ]; then echo "::error::no .wasm in $mhl"; exit 1; fi
-          echo "  found $(basename "$js") and $(basename "$wasm")"
-          node -e "const fs=require('fs');WebAssembly.compile(fs.readFileSync('$wasm')).then(()=>{console.log('  wasm compiles OK');}).catch(e=>{console.error('::error::invalid wasm:',e.message);process.exit(1);})"
+          set -euo pipefail
+
+          # --- numbl runtime ---------------------------------------------------
+          # Future (once numbl on npm has the required builtins):
+          #   npm install -g numbl
+          #   numbl=numbl
+          # For now, build the dev version from source (main tip):
+          git clone --depth 1 https://github.com/flatironinstitute/numbl /tmp/numbl-dev
+          ( cd /tmp/numbl-dev && npm ci && npm run build:cli )
+          numbl="node /tmp/numbl-dev/dist-cli/cli.js"
+          echo "numbl $($numbl --version)"
+
+          # --- install / load / test the freshly built .mhl -------------------
+          mhl=$(realpath "$(ls build/bundled/*.mhl | head -n1)")
+          name=$(node -e "const fs=require('fs');console.log(JSON.parse(fs.readFileSync(process.argv[1]+'.mip.json','utf8')).name)" "$mhl")
+          install="mip('install','$mhl')"
+          if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+            owner="${GITHUB_REPOSITORY%%/*}"
+            chan="${GITHUB_REPOSITORY##*/}"; chan="${chan#mip-}"
+            install="mip('install','--channel','${owner}/${chan}','$mhl')"
+          fi
+          echo "Testing '$name' from $(basename "$mhl") via numbl"
+          $numbl eval "${install}; mip('load','$name'); mip('test','$name')"
 
       - name: Test bundled package (macOS, SIGSEGV-tolerant)
         # MATLAB R2024b+ on macOS arm64 SIGSEGVs in _pthread_tsd_cleanup at
