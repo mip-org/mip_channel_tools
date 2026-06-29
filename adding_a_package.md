@@ -109,12 +109,15 @@ Things to determine:
    - `macos_arm64`
    - `windows_x86_64`
 
-   (`macos_x86_64` (Intel Mac) is **not** a supported channel architecture:
+   (`macos_x86_64` (Intel Mac) is **not** a CI-built architecture:
    MathWorks has [removed Intel-Mac support from `mpm`](https://github.com/mathworks-ref-arch/matlab-dockerfile/blob/main/MPM.md),
    the installer the CI uses to set up MATLAB, so MATLAB can no longer be
    installed on an Intel-macOS runner. `macos_arm64` (Apple Silicon) is the
-   only macOS target.) Most C/C++ MEX builds work on all three; Fortran or
-   CUDA may be more restrictive.
+   only macOS target CI produces. A package may still **declare**
+   `macos_x86_64` in its `mip.yaml` builds, and a maintainer with an Intel Mac
+   can produce and publish that `.mhl` with `mip-channel local-build` — see
+   `notes/LOCAL-BUILD.md`; CI just won't build it.) Most C/C++ MEX builds work
+   on all these; Fortran or CUDA may be more restrictive.
 
    **Don't reuse upstream's pre-compiled binaries.** Some upstream repos ship
    `.mexa64` / `.mexmaca64` / `.mexw64` files alongside the source. We don't
