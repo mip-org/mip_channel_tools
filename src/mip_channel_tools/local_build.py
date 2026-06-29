@@ -166,6 +166,19 @@ def run(args):
     print(f'  mip:      {os.path.abspath(args.mip_dir) if args.mip_dir else "(MATLAB path / global install)"}')
     print(f'  MIP_ROOT: {mip_root}')
 
+    # Start from a clean build/prepared and build/bundled. prepare and
+    # bundle_one each only manage THIS package's own subdir/file, so a leftover
+    # build/prepared/<other-pkg>/ or build/bundled/<other-pkg>.mhl from a
+    # previous run would otherwise be bundled/uploaded as if it were this
+    # package: prepare can legitimately produce nothing (arch not declared, or
+    # already published), and the "is anything prepared?" check below is then
+    # satisfied by the stale dir. CI never hits this — it starts from a fresh
+    # checkout — so reproduce that here.
+    for sub in ('prepared', 'bundled'):
+        stale = os.path.join(repo_root, 'build', sub)
+        if os.path.isdir(stale):
+            shutil.rmtree(stale, ignore_errors=True)
+
     # 1. prepare ------------------------------------------------------------
     prep = ['prepare', '--package-path', args.package_path,
             '--architecture', arch]
