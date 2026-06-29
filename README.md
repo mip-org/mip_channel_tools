@@ -62,18 +62,20 @@ CI builds `linux_x86_64`, `macos_arm64`, `windows_x86_64`, and `numbl_wasm`. It
 cannot build `macos_x86_64` (Intel Mac): MathWorks dropped Intel-Mac support
 from `mpm`, so MATLAB can't be installed on an Intel-macOS runner. A maintainer
 with an Intel Mac fills that gap with `local-build`, which runs the same
-`prepare → package-setup → bundle_one → test_one → upload` steps the reusable
-`build-package` workflow runs, then triggers the channel's Assemble Index
-workflow so the new architecture enters the index — exactly as CI does for the
-others. See `notes/LOCAL-BUILD.md`.
+`prepare → package-setup → bundle_one → test_one` steps the reusable
+`build-package` workflow runs — and, **with `--publish`**, uploads the `.mhl` and
+triggers the channel's Assemble Index workflow so the new architecture enters the
+index, exactly as CI does for the others. Publishing is opt-in: without
+`--publish` it only builds and tests. See `notes/LOCAL-BUILD.md`.
 
 The usual entry point is the channel's thin `scripts/local_build.sh`, which (in
 the thin-caller spirit of the workflows) just clones this engine into the
 channel and delegates here:
 
 ```bash
-cd mip-core                                   # a channel checkout, on the Intel Mac
-./scripts/local_build.sh packages/<name>/<release>
+cd mip-core                                            # checkout on the Intel Mac
+./scripts/local_build.sh packages/<name>/<release>            # build + test
+./scripts/local_build.sh packages/<name>/<release> --publish  # ... and release
 ```
 
 Architecture defaults to the host native arch (Intel Mac → `macos_x86_64`).

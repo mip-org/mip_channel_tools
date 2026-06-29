@@ -9,14 +9,16 @@ installed on an Intel-macOS GitHub runner. Apple Silicon (`macos_arm64`) is the
 only macOS target CI can produce.
 
 `mip-channel local-build` closes that gap. A maintainer with an Intel Mac (which
-has a real MATLAB install) runs it from a channel checkout; it produces and
-publishes the `macos_x86_64` `.mhl` using the **same engine** as CI, so the
-result is indistinguishable from a CI build.
+has a real MATLAB install) runs it from a channel checkout; with `--publish` it
+produces and releases the `macos_x86_64` `.mhl` using the **same engine** as CI,
+so the result is indistinguishable from a CI build.
 
 ## What it does
 
 It mirrors the reusable `build-package` workflow's per-`(package, arch)`
-pipeline, calling the identical steps:
+pipeline, calling the identical steps. Steps 1–4 always run; **5–6 only with
+`--publish`** (otherwise it stops after the test, leaving the `.mhl` in
+`build/bundled/`, so a bad build never reaches the channel by accident):
 
 1. `mip-channel prepare`        — fetch source, overlay channel files, skip if
                                   already published (unless `--force`).
@@ -25,8 +27,9 @@ pipeline, calling the identical steps:
 4. `test_one` (MATLAB)          — install / load / test the `.mhl`, and assert
                                   every shipped MEX was exercised (issue #16).
 5. `mip-channel upload`         — push the `.mhl` + `.mip.json` to the package's
-                                  GitHub Release via `gh`.
+                                  GitHub Release via `gh`.  *(`--publish`)*
 6. `gh workflow run assemble-index.yml` — rebuild the channel index + Pages.
+                                  *(`--publish`)*
 
 Step 6 is why nothing else needs to change: `assemble-index` ingests **every**
 `.mhl.mip.json` asset on each release regardless of architecture, so the
@@ -70,19 +73,21 @@ architecture, and it bypasses CI dispatch entirely.
 ## Usage
 
 ```bash
-cd mip-core                                   # channel checkout on the Intel Mac
-./scripts/local_build.sh packages/fmm2d/main  # arch auto-detected: macos_x86_64
+cd mip-core                                             # checkout on the Intel Mac
+./scripts/local_build.sh packages/fmm2d/main           # build + test only
+./scripts/local_build.sh packages/fmm2d/main --publish # ... then release + reindex
+# arch auto-detected: macos_x86_64
 ```
 
 Useful flags (forwarded to `mip-channel local-build`):
 
 | Flag | Effect |
 |---|---|
+| `--publish`          | Upload the `.mhl` to the release and reindex (default: build + test only). |
 | `--architecture <a>` | Override the auto-detected host arch. |
 | `--force`            | Rebuild even if a matching `.mhl` is already published. |
 | `--no-test`          | Skip `test_one`. |
-| `--no-publish`       | Build (and test) only; leave the `.mhl` in `build/bundled/`. |
-| `--no-reindex`       | Don't trigger the Assemble Index workflow after upload. |
+| `--no-reindex`       | With `--publish`, upload only; don't trigger the Assemble Index workflow. |
 | `--matlab <path>`    | MATLAB executable (else `$MATLAB`, `matlab` on PATH, newest `/Applications/MATLAB_R*.app`). |
 | `--mip-dir <path>`   | Use a specific `mip` checkout instead of the auto-cloned `./mip`. |
 

@@ -10,9 +10,10 @@
 #
 #   mip_channel_tools/scripts/local_build.sh packages/<name>/<release> [flags...]
 #
-# All flags after the package path are forwarded to `mip-channel local-build`
-# (e.g. --architecture, --force, --no-test, --no-publish, --no-reindex,
-# --matlab, --mip-dir). $PYTHON overrides the interpreter (default python3);
+# Builds and tests by default; add --publish to upload + reindex. All flags
+# after the package path are forwarded to `mip-channel local-build` (e.g.
+# --architecture, --force, --no-test, --publish, --no-reindex, --matlab,
+# --mip-dir). $PYTHON overrides the interpreter (default python3);
 # $MIP_RUNTIME_REF picks a mip branch/tag (default: its default branch).
 set -euo pipefail
 
