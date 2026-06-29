@@ -12,7 +12,8 @@
 #
 # All flags after the package path are forwarded to `mip-channel local-build`
 # (e.g. --architecture, --force, --no-test, --no-publish, --no-reindex,
-# --matlab, --mip-dir). $PYTHON overrides the interpreter (default python3).
+# --matlab, --mip-dir). $PYTHON overrides the interpreter (default python3);
+# $MIP_RUNTIME_REF picks a mip branch/tag (default: its default branch).
 set -euo pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,11 +24,28 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
+# Mip runtime. CI checks out mip-org/mip fresh and addpaths it; do the same into
+# the channel's gitignored ./mip rather than assume mip is on the MATLAB path
+# (it usually isn't under `matlab -batch`). --mip-dir below points the build at
+# it; a trailing --mip-dir in "$@" overrides. Leaves an existing non-git ./mip
+# (e.g. a hand-placed checkout) untouched.
+MIP_REF="${MIP_RUNTIME_REF:-}"
+if [ -d mip/.git ]; then
+  echo "Updating mip runtime (./mip) ..."
+  git -C mip fetch -q --depth 1 origin "${MIP_REF:-HEAD}"
+  git -C mip checkout -q FETCH_HEAD
+elif [ ! -e mip ]; then
+  echo "Cloning mip runtime into ./mip ..."
+  git clone -q --depth 1 ${MIP_REF:+--branch "$MIP_REF"} \
+    https://github.com/mip-org/mip.git mip
+fi
+
 echo "Installing channel tooling from $TOOLS_DIR ..."
 "$PY" -m pip install -q -e "$TOOLS_DIR"
 
 pkg="$1"; shift
 exec "$PY" -m mip_channel_tools local-build \
   --tools-dir "$TOOLS_DIR" \
+  --mip-dir "$PWD/mip" \
   --package-path "$pkg" \
   "$@"

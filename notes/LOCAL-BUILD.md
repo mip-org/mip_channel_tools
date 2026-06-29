@@ -46,7 +46,7 @@ Same thin-caller pattern as the workflows:
 So the per-channel committed code is just the irreducible bootstrap; everything
 else lives here once.
 
-## Two deliberate differences from CI
+## One deliberate difference from CI
 
 - **No self-containment "strip".** CI wipes the runner's entire toolchain
   (Xcode/Homebrew on macOS) before `test_one`, proving the `.mhl` carries its
@@ -56,9 +56,11 @@ else lives here once.
   `setup`/`compile` honest (static-link or bundle deps, per
   `MEX-RUNTIME-LIBS.md`); the strip gate remains a CI check on the
   architectures CI builds.
-- **`mip` runtime comes from the machine's MATLAB path**, not a fresh clone.
-  Pass `--mip-dir <checkout>` to `addpath` a specific `mip` (matching CI's
-  pinned `mip-org/mip`) if you need exact parity.
+
+Like CI, the `mip` runtime is a **fresh clone**: `scripts/local_build.sh` clones
+`mip-org/mip` into the channel's gitignored `./mip` and passes `--mip-dir` for
+you (mip is usually not on the MATLAB path under `matlab -batch`). Override with
+a trailing `--mip-dir <path>`, or `$MIP_RUNTIME_REF` to pin a branch/tag.
 
 `macos_x86_64` is intentionally **not** in `build_request.py`'s
 `SUPPORTED_ARCHITECTURES`: issue-driven and scheduled CI builds must keep
@@ -82,7 +84,7 @@ Useful flags (forwarded to `mip-channel local-build`):
 | `--no-publish`       | Build (and test) only; leave the `.mhl` in `build/bundled/`. |
 | `--no-reindex`       | Don't trigger the Assemble Index workflow after upload. |
 | `--matlab <path>`    | MATLAB executable (else `$MATLAB`, `matlab` on PATH, newest `/Applications/MATLAB_R*.app`). |
-| `--mip-dir <path>`   | `addpath` a specific `mip` checkout in MATLAB. |
+| `--mip-dir <path>`   | Use a specific `mip` checkout instead of the auto-cloned `./mip`. |
 
 Prerequisites on the Intel Mac: MATLAB, `git`, `gh` (authenticated with push
 access to the channel), and Python 3.8+.
