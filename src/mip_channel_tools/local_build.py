@@ -6,18 +6,23 @@ This mirrors the CI `build-package` pipeline for ONE (package, architecture)
 pair, calling the exact same steps the reusable workflow runs:
 
     prepare -> package-setup -> bundle_one (MATLAB) -> test_one (MATLAB)
-            -> upload -> trigger the channel's Assemble Index workflow
+            [ -> upload -> trigger the channel's Assemble Index workflow ]
 
 It exists for architectures GitHub Actions cannot build — chiefly
 `macos_x86_64` (Intel Mac): MathWorks dropped Intel-Mac support from `mpm` (the
 installer the CI uses), so MATLAB can no longer be installed on an Intel-macOS
 runner. A maintainer with an Intel Mac runs this from a channel checkout to
-produce and publish that architecture's `.mhl` the same way CI does for the
-others.
+produce (and, with `--publish`, release) that architecture's `.mhl` the same way
+CI does for the others.
+
+Publishing is **opt-in**: by default this only builds and tests, leaving the
+`.mhl` in `build/bundled/` so a bad build never reaches the channel by accident.
+Pass `--publish` to upload it to the package's GitHub Release and rebuild the
+channel index.
 
 Run from the channel checkout root (the directory holding `packages/`):
 
-    mip-channel local-build --package-path packages/<name>/<release>
+    mip-channel local-build --package-path packages/<name>/<release> [--publish]
 
 Architecture defaults to the host's native MIP arch (Intel Mac ->
 `macos_x86_64`, Apple Silicon -> `macos_arm64`, Linux -> `linux_x86_64`).
@@ -220,9 +225,11 @@ def run(args):
               'a MEX linking a non-bundled dev library can still pass here.')
 
     # 5. upload -------------------------------------------------------------
-    if args.no_publish:
-        print(f'\nBuilt (not published): {mhls[0]}\n'
-              f'Re-run without --no-publish to upload, or: mip-channel upload')
+    # Publishing is opt-in: by default local-build only builds and tests, so a
+    # bad build never reaches the channel by accident. --publish uploads.
+    if not args.publish:
+        print(f'\nBuilt and tested (not published): {mhls[0]}\n'
+              f'Re-run with --publish to upload to the release and reindex.')
         return 0
     _run_cli(['upload'], env, repo_root)
 
@@ -267,11 +274,14 @@ def register(subparsers):
         '--no-test', action='store_true',
         help='Skip the install/load/test step.')
     p.add_argument(
-        '--no-publish', action='store_true',
-        help='Build (and test) only; do not upload to GitHub Releases.')
+        '--publish', action='store_true',
+        help='Upload the built .mhl to the package GitHub Release and trigger '
+             'the channel reindex. Without it, local-build only builds and '
+             'tests (the .mhl is left in build/bundled/).')
     p.add_argument(
         '--no-reindex', action='store_true',
-        help="Do not trigger the channel's Assemble Index workflow after upload.")
+        help="With --publish, upload only; don't trigger the Assemble Index "
+             "workflow.")
     p.add_argument(
         '--tools-dir', default=None,
         help='mip_channel_tools checkout providing scripts/ and mexopts/ '
