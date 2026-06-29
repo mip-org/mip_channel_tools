@@ -12,6 +12,7 @@ from . import (
     build_request,
     download_stats,
     index,
+    local_build,
     package_setup,
     prepare,
     scheduled,
@@ -29,6 +30,7 @@ def main(argv=None):
 
     prepare.register(subparsers)
     package_setup.register(subparsers)
+    local_build.register(subparsers)
     upload.register(subparsers)
     index.register(subparsers)
     build_request.register(subparsers)

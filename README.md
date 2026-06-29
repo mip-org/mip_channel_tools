@@ -34,6 +34,7 @@ python -m mip_channel_tools --help
 
 mip-channel prepare --package-path packages/<name>/<release> --architecture <arch>
 mip-channel package-setup --architecture <arch>
+mip-channel local-build --package-path packages/<name>/<release> [--architecture <arch>]
 mip-channel upload [--mhl build/bundled/<file>.mhl]
 mip-channel assemble-index [--repo-root .]
 mip-channel build-request validate --output-file <path> [--title-file <path>]
@@ -54,6 +55,33 @@ For local development against a checkout:
 ```bash
 python -m pip install -e .
 ```
+
+## Local builds (architectures CI can't build)
+
+CI builds `linux_x86_64`, `macos_arm64`, `windows_x86_64`, and `numbl_wasm`. It
+cannot build `macos_x86_64` (Intel Mac): MathWorks dropped Intel-Mac support
+from `mpm`, so MATLAB can't be installed on an Intel-macOS runner. A maintainer
+with an Intel Mac fills that gap with `local-build`, which runs the same
+`prepare → package-setup → bundle_one → test_one → upload` steps the reusable
+`build-package` workflow runs, then triggers the channel's Assemble Index
+workflow so the new architecture enters the index — exactly as CI does for the
+others. See `notes/LOCAL-BUILD.md`.
+
+The usual entry point is the channel's thin `scripts/local_build.sh`, which (in
+the thin-caller spirit of the workflows) just clones this engine into the
+channel and delegates here:
+
+```bash
+cd mip-core                                   # a channel checkout, on the Intel Mac
+./scripts/local_build.sh packages/<name>/<release>
+```
+
+Architecture defaults to the host native arch (Intel Mac → `macos_x86_64`).
+`macos_x86_64` is **not** added to the CI-dispatch architecture set
+(`SUPPORTED_ARCHITECTURES`): issue-driven and scheduled builds still skip it
+because no runner can build it. `local-build` is the one path that produces it,
+and `assemble-index` ingests every release asset regardless of architecture, so
+the locally-built `.mhl` appears in the index with no further changes.
 
 ## Use from a channel
 
