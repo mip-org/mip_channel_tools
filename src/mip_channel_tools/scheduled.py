@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from .build_request import (
-    arches_from_mip_yaml,
+    candidate_arches,
     list_all_packages,
 )
 
@@ -59,7 +59,7 @@ def run(args):
     failed_pairs = []
 
     for pkg_path in list_all_packages(repo_root):
-        archs = arches_from_mip_yaml(repo_root / pkg_path)
+        archs = candidate_arches(repo_root / pkg_path)
         for arch in archs:
             print(f"\n=== Probing {pkg_path} ({arch}) ===", flush=True)
             needs_build, err = probe_pair(repo_root, pkg_path, arch, probe_dir)
