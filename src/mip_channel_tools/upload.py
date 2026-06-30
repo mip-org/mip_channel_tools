@@ -59,6 +59,25 @@ def _upload_file(repo, release_tag, file_path):
     print(f"  Uploaded {filename}")
 
 
+def _inject_sha256(mip_json_path, mhl_path):
+    """Add the .mhl's sha256 to its .mip.json, preserving it byte-for-byte
+    otherwise.
+
+    encoding='utf-8' is required: this runs on the build's native-arch runner,
+    so on Windows Python's default open() encoding is the locale code page
+    (windows-1252), which silently corrupts the UTF-8 .mip.json MATLAB wrote
+    (e.g. an em-dash in `description` becomes 'â€"'). The mangled metadata then
+    no longer matches the channel mip.yaml and the scheduled build rebuilds the
+    package forever. Linux/macOS escape it only because their default is UTF-8.
+    """
+    with open(mip_json_path, 'r', encoding='utf-8') as f:
+        mip_json = json.load(f)
+    mip_json['mhl_sha256'] = _sha256_of_file(mhl_path)
+    with open(mip_json_path, 'w', encoding='utf-8') as f:
+        json.dump(mip_json, f, indent=2)
+    return mip_json['mhl_sha256']
+
+
 def upload_mhl(mhl_path, release_tag=None, prerelease=False):
     mhl_filename = os.path.basename(mhl_path)
     mip_json_path = f"{mhl_path}.mip.json"
@@ -66,12 +85,8 @@ def upload_mhl(mhl_path, release_tag=None, prerelease=False):
         print(f"Error: {mhl_filename}.mip.json not found", file=sys.stderr)
         return False
 
-    with open(mip_json_path, 'r') as f:
-        mip_json = json.load(f)
-    mip_json['mhl_sha256'] = _sha256_of_file(mhl_path)
-    with open(mip_json_path, 'w') as f:
-        json.dump(mip_json, f, indent=2)
-    print(f"  SHA-256: {mip_json['mhl_sha256']}")
+    sha256 = _inject_sha256(mip_json_path, mhl_path)
+    print(f"  SHA-256: {sha256}")
 
     # A caller-supplied release_tag (e.g. the rolling `_test-builds` prerelease)
     # overrides the per-package tag derived from the filename. Test builds
