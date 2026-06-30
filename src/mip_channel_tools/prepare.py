@@ -162,7 +162,12 @@ def compute_directory_hash(directory):
         files.sort()
         for filename in files:
             file_path = os.path.join(root, filename)
-            rel = os.path.relpath(file_path, directory)
+            # Normalise the path separator to '/' so the hash is identical
+            # on a Windows build runner (os.sep == '\\') and the Linux
+            # scheduled-build probe. Without this, a release folder with
+            # subdirectories hashes differently on Windows, so the daily
+            # probe sees a mismatch and rebuilds windows_x86_64 forever.
+            rel = os.path.relpath(file_path, directory).replace(os.sep, '/')
             sha1.update(rel.encode('utf-8'))
             sha1.update(b'\0')
             try:
