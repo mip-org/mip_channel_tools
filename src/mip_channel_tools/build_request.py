@@ -48,6 +48,8 @@ Subcommands:
 
 import os
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -131,6 +133,89 @@ def arches_from_mip_yaml(pkg_dir):
     with open(mip_yaml) as f:
         config = yaml.safe_load(f) or {}
     return arches_from_mip_config(config)
+
+
+def _github_owner_repo(git_url):
+    """Parse (owner, repo) from a github.com git URL, or None if not GitHub."""
+    url = git_url.strip()
+    for prefix in ("https://", "http://", "git://"):
+        if url.startswith(prefix):
+            url = url[len(prefix):]
+            break
+    else:
+        if url.startswith("git@"):
+            # scp-style: git@github.com:owner/repo.git
+            url = url[len("git@"):].replace(":", "/", 1)
+    if url.startswith("www."):
+        url = url[len("www."):]
+    host = "github.com/"
+    if not url.startswith(host):
+        return None
+    rest = url[len(host):]
+    if rest.endswith(".git"):
+        rest = rest[:-len(".git")]
+    parts = rest.strip("/").split("/")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[0], parts[1]
+
+
+def fetch_source_mip_yaml(pkg_dir):
+    """Download the upstream `mip.yaml` for a package whose manifest ships in
+    its source repo (no channel-side `mip.yaml`).
+
+    Reads `source.yaml`, and for a github.com git source fetches the single
+    `mip.yaml` at the repo base (honouring `subdirectory`) for the recipe's
+    branch via raw.githubusercontent.com. Returns the parsed dict, or None if
+    the source isn't a fetchable GitHub git source or the file can't be
+    retrieved.
+    """
+    source_yaml = pkg_dir / "source.yaml"
+    if not source_yaml.is_file():
+        return None
+    with open(source_yaml) as f:
+        recipe = yaml.safe_load(f) or {}
+    source = recipe.get("source") or {}
+    git_url = source.get("git")
+    if not git_url:
+        return None
+    owner_repo = _github_owner_repo(git_url)
+    if not owner_repo:
+        return None
+    owner, repo = owner_repo
+    ref = source.get("branch") or "HEAD"
+    subdir = (source.get("subdirectory") or "").strip("/")
+    path = f"{subdir}/mip.yaml" if subdir else "mip.yaml"
+    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+    try:
+        with urllib.request.urlopen(raw_url, timeout=30) as resp:
+            data = resp.read()
+    except (urllib.error.URLError, OSError):
+        return None
+    return yaml.safe_load(data) or {}
+
+
+def candidate_arches(pkg_dir):
+    """Architectures to probe/dispatch for a package in automated paths.
+
+    Mirrors how `prepare` resolves architectures (from the source-or-channel
+    `mip.yaml`), unlike `arches_from_mip_yaml` which sees only the channel
+    copy:
+
+    - Channel ships a `mip.yaml`: use the arches it declares (intersected
+      with SUPPORTED_ARCHITECTURES).
+    - No channel `mip.yaml` (the manifest ships in the upstream source, e.g.
+      `mip` itself): download the upstream `mip.yaml` from the source repo
+      and read its declared arches.
+
+    Returns an empty list if the upstream `mip.yaml` can't be fetched.
+    """
+    if (pkg_dir / "mip.yaml").is_file():
+        return arches_from_mip_yaml(pkg_dir)
+    mip_yaml = fetch_source_mip_yaml(pkg_dir)
+    if mip_yaml is None:
+        return []
+    return arches_from_mip_config(mip_yaml)
 
 
 def parse_issue(body, repo_root):
