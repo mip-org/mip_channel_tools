@@ -5,8 +5,10 @@ Given a newline-delimited list of paths that changed in a push, emit one TSV
 row per build to dispatch: `<package_path>\t<architecture>`. A file affects
 package `packages/<name>/<version>` if its path starts with that prefix.
 Each affected package is expanded to every architecture declared in its
-`mip.yaml` (intersected with the channel's SUPPORTED_ARCHITECTURES). Recipe-
-only packages (no channel-side mip.yaml) expand to every supported arch.
+`mip.yaml` (intersected with the channel's SUPPORTED_ARCHITECTURES). For a
+package with no channel-side `mip.yaml` (its manifest ships in the upstream
+source), the arches are read from the upstream `mip.yaml` fetched from the
+source repo.
 
 Packages whose `source.yaml` no longer exists at HEAD (deletions) are
 silently skipped.
@@ -15,7 +17,7 @@ silently skipped.
 import sys
 from pathlib import Path
 
-from .build_request import arches_from_mip_yaml
+from .build_request import candidate_arches
 
 
 def affected_packages(changed_files, repo_root):
@@ -42,7 +44,7 @@ def run(args):
 
     rows = []
     for pkg_path in affected_packages(changed, repo_root):
-        for arch in arches_from_mip_yaml(repo_root / pkg_path):
+        for arch in candidate_arches(repo_root / pkg_path):
             rows.append(f"{pkg_path}\t{arch}")
 
     with open(args.dispatch_file, "w") as f:
