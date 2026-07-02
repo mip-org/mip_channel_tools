@@ -232,16 +232,18 @@ sources everything from upstream git repositories.
 - **`source.yaml` must not contain a `version:` field.** The release directory
   name *is* the version.
 - **`mip.yaml` `version:` must be blank or numeric** (`x`, `x.y`, `x.y.z`).
-- **The release directory name must equal either `mip.yaml`'s `version:` or
-  the recipe's `source.branch`.**
+- **A numeric release directory name must equal `mip.yaml`'s `version:`**
+  (when one is set). A non-numeric release directory name (e.g. a branch
+  name like `main`) is always allowed and takes precedence over `mip.yaml`'s
+  version — it is what the bundled `mip.json` records.
 
-So the two valid shapes are:
+So the two common shapes are:
 
 - *Tagged release:* dir `1.4.1`, `mip.yaml` `version: "1.4.1"`, recipe
   `branch: "v1.4.1"` (dir matches the version).
-- *Branch-tracked:* dir `master`, `mip.yaml` `version:` blank, recipe with no
-  `branch:` or `branch: master` (the equality check is skipped when the
-  version is blank).
+- *Branch-tracked:* dir `master`, `mip.yaml` `version:` blank or numeric,
+  recipe with no `branch:` or `branch: master` (the non-numeric dir name
+  wins over any `mip.yaml` version).
 
 ### Notes
 
@@ -287,7 +289,7 @@ builds:
 | Field | Type | Description |
 | --- | --- | --- |
 | `name` | string | Canonical package name. **Required.** Matches the directory name; all lowercase. |
-| `version` | string | Version string. Must match the release directory name, or be blank for a branch-tracked package. Quote it (`"1.0"`) so YAML doesn't coerce it to a number. |
+| `version` | string | Version string; blank or numeric. A numeric release directory name must match it; a non-numeric release directory name (branch-tracked package) takes precedence over it. Quote it (`"1.0"`) so YAML doesn't coerce it to a number. |
 | `description` | string | Short human-readable summary. |
 | `license` | string | SPDX identifier (`"MIT"`, `"BSD-3-Clause"`, `"GPL-2.0"`, `"LicenseRef-MathWorks"`, …). |
 | `homepage` | string | Project homepage URL. |
