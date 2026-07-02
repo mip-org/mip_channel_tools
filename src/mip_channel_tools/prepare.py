@@ -214,7 +214,7 @@ def is_numeric_version(s):
 
 
 def validate_channel_version_rules(mip_yaml_path, recipe, release_version):
-    """See mip-channel-template README for the rules."""
+    """See mip's docs/specification.md §11.2.1 for the rules."""
     if 'version' in recipe:
         raise ValueError(
             "source.yaml must not contain a 'version' field "
@@ -223,16 +223,18 @@ def validate_channel_version_rules(mip_yaml_path, recipe, release_version):
     with open(mip_yaml_path, 'r') as f:
         mip_yaml = yaml.safe_load(f) or {}
     mv = str(mip_yaml.get('version') or '').strip()
-    source_branch = (recipe.get('source') or {}).get('branch') or ''
 
     if mv and not is_numeric_version(mv):
         raise ValueError(
             f"mip.yaml 'version' must be blank or numeric, got {mv!r}.")
 
-    if mv and release_version != mv and release_version != source_branch:
+    # A numeric release directory must match mip.yaml's version when one is
+    # set. A non-numeric release directory (e.g. a branch name like 'main')
+    # is always allowed and takes precedence over mip.yaml's version.
+    if mv and is_numeric_version(release_version) and release_version != mv:
         raise ValueError(
-            f"Release directory {release_version!r} must equal mip.yaml "
-            f"version {mv!r} or recipe source.branch {source_branch!r}.")
+            f"Numeric release directory {release_version!r} must equal "
+            f"mip.yaml version {mv!r}.")
 
 
 def read_mip_yaml(mip_yaml_path):
