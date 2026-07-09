@@ -41,6 +41,20 @@ def _rmtree_on_error(func, path, exc_info):
     func(path)
 
 
+def _run_git(cmd):
+    """Run a git command, echoing git's stderr if it fails.
+
+    Output is captured to keep successful runs quiet, but that also swallows
+    git's error message on failure -- a bare CalledProcessError ("exit status
+    128") is undiagnosable from a CI log. Print stderr before re-raising."""
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or b'').decode('utf-8', errors='replace')
+        print(stderr, file=sys.stderr)
+        raise
+
+
 def clone_git_repository(url, destination, subdirectory=None, branch=None,
                          submodules=False):
     """Clone a git repository, optionally extracting a subdirectory.
@@ -48,7 +62,12 @@ def clone_git_repository(url, destination, subdirectory=None, branch=None,
     When `submodules` is set, the clone recurses into git submodules so their
     working trees are populated (needed by sources whose build descends into a
     submodule, e.g. fmm3dbie's vendored FMM3D)."""
-    clone_args = []
+    # Git for Windows refuses to check out paths longer than 260 chars unless
+    # core.longpaths is set (the GitHub Windows runners don't set it), and
+    # some upstream trees are deep enough to breach that under
+    # build/prepared/_temp_<name>_<release>/ (e.g. PIVlab's MATLAB-project
+    # resources/ folder). No effect on other platforms.
+    clone_args = ["-c", "core.longpaths=true"]
     if branch:
         clone_args += ["--branch", branch]
     if submodules:
@@ -56,10 +75,7 @@ def clone_git_repository(url, destination, subdirectory=None, branch=None,
     if subdirectory:
         temp_clone_dir = destination + "_temp_clone"
         print(f'  Cloning {url} (subdirectory: {subdirectory})...')
-        subprocess.run(
-            ["git", "clone"] + clone_args + [url, temp_clone_dir],
-            check=True, capture_output=True
-        )
+        _run_git(["git", "clone"] + clone_args + [url, temp_clone_dir])
         subdir_path = os.path.join(temp_clone_dir, subdirectory)
         if not os.path.isdir(subdir_path):
             shutil.rmtree(temp_clone_dir, onerror=_rmtree_on_error)
@@ -78,10 +94,7 @@ def clone_git_repository(url, destination, subdirectory=None, branch=None,
         shutil.rmtree(temp_clone_dir, onerror=_rmtree_on_error)
     else:
         print(f'  Cloning {url}...')
-        subprocess.run(
-            ["git", "clone"] + clone_args + [url, destination],
-            check=True, capture_output=True
-        )
+        _run_git(["git", "clone"] + clone_args + [url, destination])
 
     for root, dirs, files in os.walk(destination):
         if ".git" in dirs:
