@@ -50,6 +50,34 @@ def test_directory_hash_changes_with_content(tmp_path):
     assert compute_directory_hash(str(a)) != compute_directory_hash(str(b))
 
 
+def test_fetch_source_remove_dirs_and_files(tmp_path):
+    # fetch_source's removal pass runs after the source is in place; with no
+    # fetch key in the recipe it operates on the existing tree, so it can be
+    # tested without network. remove_dirs takes directories, remove_files
+    # takes individual files (e.g. a large demo dataset inside a kept dir);
+    # missing entries and wrong-kind entries are ignored.
+    from mip_channel_tools.prepare import fetch_source
+
+    root = tmp_path / "pkg"
+    _make_tree(str(root))
+    os.makedirs(os.path.join(str(root), "example"))
+    with open(os.path.join(str(root), "example", "data.mat"), "wb") as f:
+        f.write(b"x" * 100)
+    with open(os.path.join(str(root), "matlab", "huge.mat"), "wb") as f:
+        f.write(b"x" * 100)
+
+    fetch_source({"source": {
+        "remove_dirs": ["example", "no_such_dir", "top.txt"],
+        "remove_files": ["matlab/huge.mat", "no/such.file", "matlab"],
+    }}, str(root))
+
+    assert not os.path.exists(os.path.join(str(root), "example"))
+    assert not os.path.exists(os.path.join(str(root), "matlab", "huge.mat"))
+    # untouched: kept files, a file listed in remove_dirs, a dir in remove_files
+    assert os.path.exists(os.path.join(str(root), "top.txt"))
+    assert os.path.exists(os.path.join(str(root), "matlab", "a.m"))
+
+
 # --- Channel version rules (mip-org/mip#315) --------------------------------
 
 import pytest

@@ -209,6 +209,7 @@ source:
   branch: "v1.4.1"                            # branch OR tag name (optional)
   subdirectory: "matlab"                      # extract only this subdir (optional)
   remove_dirs: [html, deprecated, dev]        # delete these dirs after clone (optional)
+  remove_files: [data/huge_demo.mat]          # delete these files after clone (optional)
 ```
 
 ### Alternate: ZIP source

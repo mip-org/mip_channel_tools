@@ -308,6 +308,12 @@ def fetch_source(recipe, target_dir):
             if os.path.isdir(dir_path):
                 shutil.rmtree(dir_path, onerror=_rmtree_on_error)
                 print(f"    Removed directory: {dir_name}")
+
+        for file_name in source.get('remove_files', []):
+            file_path = os.path.join(target_dir, file_name)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+                print(f"    Removed file: {file_name}")
     finally:
         os.chdir(original_dir)
 
