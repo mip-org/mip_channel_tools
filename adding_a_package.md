@@ -361,7 +361,7 @@ Supported architecture values: `linux_x86_64`, `macos_arm64`,
 > A build entry may instead use the singular `architecture:` (one arch per
 > entry) with a flat `setup:` list; package-level `compile_script` /
 > `test_script` / `paths` then act as defaults. Both shapes are supported; the
-> list form is the common one. See [notes/MIP-YAML-BUILDS.md](notes/MIP-YAML-BUILDS.md).
+> list form is the common one. See [MIP-YAML-BUILDS.md](https://github.com/mip-org/devnotes/blob/main/MIP-YAML-BUILDS.md).
 
 ### Common patterns
 
