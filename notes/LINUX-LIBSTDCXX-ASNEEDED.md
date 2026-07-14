@@ -2,7 +2,7 @@
 
 ## Symptom
 
-After switching the Linux build to **gcc-toolset-10** (see [MATLAB-GCC.md](MATLAB-GCC.md)),
+After switching the Linux build to **gcc-toolset-10** (see [MATLAB-GCC.md](https://github.com/mip-org/devnotes/blob/main/MATLAB-GCC.md)),
 linking a MEX file fails with a wall of undefined references — all originating *inside*
 gcc-toolset's `libstdc++_nonshared.a`:
 
@@ -143,6 +143,6 @@ paths; gptoolbox was simply the first C++ consumer to reach it.
 
 ## See also
 
-- [MATLAB-GCC.md](MATLAB-GCC.md) — why the build uses gcc-toolset-10 and the `GLIBCXX` floor.
+- [MATLAB-GCC.md](https://github.com/mip-org/devnotes/blob/main/MATLAB-GCC.md) — why the build uses gcc-toolset-10 and the `GLIBCXX` floor.
 - `.github/workflows/build-package.yml` — the Linux toolchain step (installs gcc-toolset-10 and
   symlinks it into `/usr/bin` so MATLAB's `mex` detection finds it).

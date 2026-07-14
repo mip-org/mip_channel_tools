@@ -57,7 +57,7 @@ else lives here once.
   machine, so `local-build` skips it. Consequence: a MEX that links a
   non-bundled dev library can still pass the local test. Keep the package's
   `setup`/`compile` honest (static-link or bundle deps, per
-  `MEX-RUNTIME-LIBS.md`); the strip gate remains a CI check on the
+  [MEX-RUNTIME-LIBS.md](https://github.com/mip-org/devnotes/blob/main/MEX-RUNTIME-LIBS.md)); the strip gate remains a CI check on the
   architectures CI builds.
 
 Like CI, the `mip` runtime is a **fresh clone**: `scripts/local_build.sh` clones

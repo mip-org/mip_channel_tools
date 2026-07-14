@@ -94,7 +94,7 @@ jobs:
     # bundled .so load on the RHEL/Rocky 8 fleet. ubi8 is the oldest glibc
     # MathWorks supports for MATLAB and matches the deployment target exactly; it
     # is also the lowest glibc the GitHub Actions runner's Node (20/24) runs on.
-    # Other arches use no container (empty string). See MATLAB-GLIBC.md.
+    # Other arches use no container (empty string). See devnotes/MATLAB-GLIBC.md.
     container: ${{ inputs.architecture == 'linux_x86_64' && 'mathworks/matlab-deps:r2022a-ubi8' || '' }}
     outputs:
       has_bundle: ${{ steps.bundle_check.outputs.has_bundle }}
@@ -144,7 +144,7 @@ jobs:
           # same GLIBCXX_3.4.25 floor as gcc-8.5 (within R2022a's bundled libstdc++)
           # with a newer compiler and no floor regression. Verified on ubi8: a C++17
           # std::filesystem .so links yet still requires only GLIBCXX_3.4.21, and
-          # glibc stays 2.28. See mip_channel_tools/notes/MATLAB-GCC.md.
+          # glibc stays 2.28. See https://github.com/mip-org/devnotes/blob/main/MATLAB-GCC.md.
           #
           # gcc-toolset-10 lives in Rocky's AppStream (not ubi8's subset), so add the
           # Rocky repos first. Rocky 8 is a 1:1 RHEL 8 rebuild with open repos (same
@@ -216,7 +216,7 @@ jobs:
           # toolchain on disk and export MW_MINGW64_LOC (the documented hook
           # mingw64.xml reads); no support-package install or XML editing. The
           # install path has no spaces, per the MathWorks requirement.
-          # See mip_channel_tools/notes/MATLAB-MINGW.md.
+          # See https://github.com/mip-org/devnotes/blob/main/MATLAB-MINGW.md.
           $url = 'https://downloads.sourceforge.net/project/mingw-w64/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z'
           $arc = "$env:RUNNER_TEMP\mingw810.7z"
           curl.exe -L --retry 5 --retry-all-errors --fail -o "$arc" "$url"
@@ -376,15 +376,16 @@ jobs:
         uses: matlab-actions/setup-matlab@v3
         with:
           cache: true
-          # R2022a pins the libstdc++/libgfortran ABI axis (MATLAB-GCC.md). The
-          # glibc axis is the ubi8 container's job (MATLAB-GLIBC.md), NOT the
+          # R2022a pins the libstdc++/libgfortran ABI axis (devnotes/MATLAB-GCC.md).
+          # The glibc axis is the ubi8 container's job (devnotes/MATLAB-GLIBC.md),
+          # NOT the
           # MATLAB version. Per-arch overrides, each the OLDEST release that
           # works (oldest MEX -> widest forward compatibility):
           #   - macos_arm64: R2023b, the oldest Apple-Silicon-native MATLAB
           #     (R2022a links arm64 MEX against x86_64 libmx, "symbol(s) not
           #     found for arm64").
           #   - windows_x86_64: R2023a, the oldest release that certifies the
-          #     MinGW we install (8.1.0; see mip_channel_tools/notes/MATLAB-MINGW.md). R2022a's
+          #     MinGW we install (8.1.0; see devnotes/MATLAB-MINGW.md). R2022a's
           #     mex config predates 8.1.0 and rejects modern GCC outright.
           #   - everything else: R2022a.
           release: ${{ inputs.architecture == 'macos_arm64' && 'R2023b' || inputs.architecture == 'windows_x86_64' && 'R2023a' || 'R2022a' }}
@@ -417,8 +418,8 @@ jobs:
         if: inputs.architecture == 'linux_x86_64' && steps.bundle_check.outputs.has_bundle == 'true'
         shell: bash
         run: |
-          # MATLAB-GLIBC.md: a MEX (or a bundled .so) built against newer glibc
-          # won't load on the Rocky/RHEL 8 fleet (glibc 2.28). Inspect every ELF
+          # devnotes/MATLAB-GLIBC.md: a MEX (or a bundled .so) built against newer
+          # glibc won't load on the Rocky/RHEL 8 fleet (glibc 2.28). Inspect every ELF
           # inside the shipped .mhl (a zip) and fail if anything requires a symbol
           # newer than 2.28, so a base-image bump can't silently raise the floor.
           mhl=$(ls build/bundled/*.mhl | head -n1)

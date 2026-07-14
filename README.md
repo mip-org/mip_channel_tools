@@ -18,7 +18,8 @@ This was extracted from the channel repos (it previously lived under their
 - `scripts/` — MATLAB build helpers (`bundle_one.m`, `test_one.m`, ...).
 - `mexopts/` — MEX compiler configs per architecture.
 - `vcpkg-triplets/` — shared vcpkg overlay triplets (Windows native-dep builds).
-- `notes/` — developer notes on the build system.
+- `notes/` — developer notes on the build system (general platform
+  compatibility notes live in [mip-org/devnotes](https://github.com/mip-org/devnotes)).
 - `adding_a_package.md` — guide for adding a package to a channel.
 
 ## Usage

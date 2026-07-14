@@ -19,7 +19,7 @@ but is an **extraction hang**.
 
 It started when GitHub's `windows-latest` alias rolled from windows-2025 to
 windows-2022 in mid-June 2026 (and is now permanent, because we deliberately
-pin `windows-2022` — see [MATLAB-MINGW.md](MATLAB-MINGW.md) and the runner
+pin `windows-2022` — see [MATLAB-MINGW.md](https://github.com/mip-org/devnotes/blob/main/MATLAB-MINGW.md) and the runner
 pin in `build-package.yml`: `windows-latest` moved to VS2026, which MATLAB
 can't use as a MEX compiler). Same gptoolbox source, same archive — only the
 runner image changed.
@@ -106,7 +106,7 @@ the following are required and the naive forms fail:
 So the MSYS2 route trades one host dependency for three. The `.zip` +
 System32-bsdtar route depends only on tools Windows always ships, decoded
 in-process. (MSYS2 ≠ MinGW: MSYS2 is the POSIX runtime/distribution that owns
-this `tar`; the build's MinGW-w64 toolchain — [MATLAB-MINGW.md](MATLAB-MINGW.md)
+this `tar`; the build's MinGW-w64 toolchain — [MATLAB-MINGW.md](https://github.com/mip-org/devnotes/blob/main/MATLAB-MINGW.md)
 — is separate.)
 
 ## Rule of thumb
