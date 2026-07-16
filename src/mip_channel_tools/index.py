@@ -180,13 +180,13 @@ class IndexAssembler:
             print(f"  Warning: Failed to download/parse {asset_name}: {e}")
             return None
 
-    def _read_min_mip_version(self):
+    def _read_mip_compatibility_floor(self):
         """
-        Read the optional min_mip_version from <repo_root>/channel.yaml.
+        Read the optional mip_compatibility_floor from <repo_root>/channel.yaml.
 
         A channel declares the minimum mip version its packages need with:
 
-            min_mip_version: "1.2.0"
+            mip_compatibility_floor: "1.2.0"
 
         The mip client prints an update-required notice when the installed
         mip is older. Returns the version string, or None when channel.yaml
@@ -203,12 +203,12 @@ class IndexAssembler:
             return None
         if not isinstance(config, dict):
             return None
-        value = config.get('min_mip_version')
+        value = config.get('mip_compatibility_floor')
         if value is None:
             return None
         value = str(value)
         if not _is_numeric_version(value):
-            print(f"  Warning: ignoring non-numeric min_mip_version "
+            print(f"  Warning: ignoring non-numeric mip_compatibility_floor "
                   f"'{value}' in channel.yaml")
             return None
         return value
@@ -301,10 +301,10 @@ class IndexAssembler:
             'last_updated': datetime.utcnow().isoformat() + 'Z'
         }
 
-        min_mip_version = self._read_min_mip_version()
-        if min_mip_version:
-            index_data['min_mip_version'] = min_mip_version
-            print(f"  Channel requires mip >= {min_mip_version} "
+        mip_compatibility_floor = self._read_mip_compatibility_floor()
+        if mip_compatibility_floor:
+            index_data['mip_compatibility_floor'] = mip_compatibility_floor
+            print(f"  Channel requires mip >= {mip_compatibility_floor} "
                   f"(from channel.yaml)")
 
         # Create output directory for GitHub Pages

@@ -1,4 +1,4 @@
-"""Unit tests for the optional channel.yaml min_mip_version index field."""
+"""Unit tests for the optional channel.yaml mip_compatibility_floor index field."""
 
 from mip_channel_tools.index import IndexAssembler, _is_numeric_version
 
@@ -19,41 +19,41 @@ def test_is_numeric_version():
 
 def test_no_channel_yaml_returns_none(tmp_path, monkeypatch):
     assembler = _make_assembler(tmp_path, monkeypatch)
-    assert assembler._read_min_mip_version() is None
+    assert assembler._read_mip_compatibility_floor() is None
 
 
-def test_reads_min_mip_version(tmp_path, monkeypatch):
-    (tmp_path / "channel.yaml").write_text('min_mip_version: "1.2.0"\n',
+def test_reads_mip_compatibility_floor(tmp_path, monkeypatch):
+    (tmp_path / "channel.yaml").write_text('mip_compatibility_floor: "1.2.0"\n',
                                            encoding="utf-8")
     assembler = _make_assembler(tmp_path, monkeypatch)
-    assert assembler._read_min_mip_version() == "1.2.0"
+    assert assembler._read_mip_compatibility_floor() == "1.2.0"
 
 
 def test_unquoted_yaml_number_is_stringified(tmp_path, monkeypatch):
     # YAML parses an unquoted 1.2 as a float; the index field must still be
     # a version string.
-    (tmp_path / "channel.yaml").write_text("min_mip_version: 1.2\n",
+    (tmp_path / "channel.yaml").write_text("mip_compatibility_floor: 1.2\n",
                                            encoding="utf-8")
     assembler = _make_assembler(tmp_path, monkeypatch)
-    assert assembler._read_min_mip_version() == "1.2"
+    assert assembler._read_mip_compatibility_floor() == "1.2"
 
 
 def test_missing_key_returns_none(tmp_path, monkeypatch):
     (tmp_path / "channel.yaml").write_text("description: a channel\n",
                                            encoding="utf-8")
     assembler = _make_assembler(tmp_path, monkeypatch)
-    assert assembler._read_min_mip_version() is None
+    assert assembler._read_mip_compatibility_floor() is None
 
 
 def test_non_numeric_value_ignored(tmp_path, monkeypatch):
-    (tmp_path / "channel.yaml").write_text("min_mip_version: main\n",
+    (tmp_path / "channel.yaml").write_text("mip_compatibility_floor: main\n",
                                            encoding="utf-8")
     assembler = _make_assembler(tmp_path, monkeypatch)
-    assert assembler._read_min_mip_version() is None
+    assert assembler._read_mip_compatibility_floor() is None
 
 
 def test_malformed_yaml_ignored(tmp_path, monkeypatch):
-    (tmp_path / "channel.yaml").write_text("min_mip_version: [unclosed\n",
+    (tmp_path / "channel.yaml").write_text("mip_compatibility_floor: [unclosed\n",
                                            encoding="utf-8")
     assembler = _make_assembler(tmp_path, monkeypatch)
-    assert assembler._read_min_mip_version() is None
+    assert assembler._read_mip_compatibility_floor() is None
