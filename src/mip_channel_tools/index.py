@@ -15,10 +15,14 @@ This command should be run after `mip-channel upload`.
 
 import os
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 from datetime import datetime
+
+import yaml
+
 from .config import get_github_repo, get_base_url
 
 
@@ -28,6 +32,12 @@ def _version_sort_key(version_str):
         return tuple(int(x) for x in version_str.split('.'))
     except (ValueError, AttributeError):
         return (0,)
+
+
+def _is_numeric_version(version_str):
+    """True for dot-separated all-digit versions (same rule as mip client)."""
+    return isinstance(version_str, str) and \
+        re.fullmatch(r'\d+(\.\d+)*', version_str) is not None
 
 
 def _package_sort_key(pkg):
@@ -170,6 +180,39 @@ class IndexAssembler:
             print(f"  Warning: Failed to download/parse {asset_name}: {e}")
             return None
 
+    def _read_min_mip_version(self):
+        """
+        Read the optional min_mip_version from <repo_root>/channel.yaml.
+
+        A channel declares the minimum mip version its packages need with:
+
+            min_mip_version: "1.2.0"
+
+        The mip client prints an update-required notice when the installed
+        mip is older. Returns the version string, or None when channel.yaml
+        is absent or does not declare a usable (numeric) value.
+        """
+        config_path = os.path.join(self.repo_root, 'channel.yaml')
+        if not os.path.isfile(config_path):
+            return None
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            print(f"  Warning: could not parse {config_path}: {e}")
+            return None
+        if not isinstance(config, dict):
+            return None
+        value = config.get('min_mip_version')
+        if value is None:
+            return None
+        value = str(value)
+        if not _is_numeric_version(value):
+            print(f"  Warning: ignoring non-numeric min_mip_version "
+                  f"'{value}' in channel.yaml")
+            return None
+        return value
+
     def _copy_static_site(self, gh_pages_dir):
         """
         Copy the static site assets (index.html, etc.) from site/ into
@@ -257,6 +300,12 @@ class IndexAssembler:
             'total_packages': len(package_metadata),
             'last_updated': datetime.utcnow().isoformat() + 'Z'
         }
+
+        min_mip_version = self._read_min_mip_version()
+        if min_mip_version:
+            index_data['min_mip_version'] = min_mip_version
+            print(f"  Channel requires mip >= {min_mip_version} "
+                  f"(from channel.yaml)")
 
         # Create output directory for GitHub Pages
         gh_pages_dir = os.path.join(self.repo_root, 'build', 'gh-pages')
