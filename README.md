@@ -51,6 +51,12 @@ Commands that read the channel tree (`assemble-index`, `affected`,
 `scheduled-check`, `build-request`) take `--repo-root` (default: the current
 directory), so they must be run from, or pointed at, the channel checkout.
 
+A channel may place an optional `channel.yaml` at its repo root. The one
+recognized key is `mip_compatibility_floor` (a numeric version string, e.g.
+`"1.2.0"`); `assemble-index` copies it into `index.json` as a top-level
+field, and the mip client tells users an update is required when their
+installed mip is older.
+
 For local development against a checkout:
 
 ```bash
