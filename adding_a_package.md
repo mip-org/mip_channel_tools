@@ -1,11 +1,11 @@
-# Adding a Package to this channel
+# Adding a Package to a mip Channel
 
-This document explains how to add a new MATLAB package to this channel
-(mip-dev) from a GitHub repository URL. Each package is described by a small
-set of YAML and MATLAB files under `packages/<name>/<release>/`.
+This document explains how to add a new MATLAB package to a mip channel from a
+GitHub repository URL. Each package is described by a small set of YAML and
+MATLAB files under `packages/<name>/<release>/` in the channel repo.
 
-Unlike a "build everything on every push" channel, builds here run **one
-`(package, architecture)` pair at a time** and are triggered three ways:
+Rather than "build everything on every push", the build engine runs **one
+`(package, architecture)` pair at a time** and is triggered three ways:
 automatically on push to `main` (only for the packages a push touches), daily
 by a scheduled probe, or manually via a GitHub issue. The end-to-end flow for
 one pair: [`mip-channel prepare`](https://github.com/mip-org/mip_channel_tools/blob/main/src/mip_channel_tools/prepare.py) clones
@@ -17,12 +17,12 @@ enforces the MEX-coverage gate; the `.mhl` is uploaded to GitHub Releases and
 the channel index is refreshed. See [README.md](README.md) for the full build
 model (push / scheduled / issue, the `approve` step, `force`, `all-packages`).
 
-The existing packages in [packages/](packages/) are the best reference for the
-patterns below — e.g. [chebfun](packages/chebfun/5.7.0) (pure MATLAB),
-[sedumi](packages/sedumi/1.3.8) (many MEX + BLAS),
-[fmmlib2d](packages/fmmlib2d/1.2.4) (separate `compile_windows.m`),
-[gptoolbox](packages/gptoolbox/master) (CMake + vcpkg, trimmed features), and
-[spm](packages/spm/master) (Makefile-driven on Linux/macOS, direct-`mex` on
+The packages in the [mip-org/core channel](https://github.com/mip-org/mip-core/tree/main/packages) are a good reference for the
+patterns below — e.g. [chebfun](https://github.com/mip-org/mip-core/tree/main/packages/chebfun/5.7.0) (pure MATLAB),
+[sedumi](https://github.com/mip-org/mip-core/tree/main/packages/sedumi/1.3.8) (many MEX + BLAS),
+[fmmlib2d](https://github.com/mip-org/mip-core/tree/main/packages/fmmlib2d/1.2.4) (separate `compile_windows.m`),
+[gptoolbox](https://github.com/mip-org/mip-core/tree/main/packages/gptoolbox/master) (CMake + vcpkg, trimmed features), and
+[spm](https://github.com/mip-org/mip-core/tree/main/packages/spm/master) (Makefile-driven on Linux/macOS, direct-`mex` on
 Windows, with an `[any]` fallback).
 
 The `mip` tool itself lives in a separate repo, [mip-org/mip](https://github.com/mip-org/mip);
@@ -54,7 +54,7 @@ Things to determine:
    **MathWorks license.** Packages authored by The MathWorks typically ship a
    BSD-3-Clause variant whose third clause limits the end-user grant to
    "MathWorks products and service offerings" (e.g.
-   [dotenv](packages/dotenv/1.1.4/mip.yaml)). Redistribution is permitted, so
+   [dotenv](https://github.com/mip-org/mip-core/blob/main/packages/dotenv/1.1.4/mip.yaml)). Redistribution is permitted, so
    the channel may carry these. Set `license: "LicenseRef-MathWorks"` and note
    the use restriction in the package `README.md` (Step 7).
 
@@ -83,13 +83,13 @@ Things to determine:
      `mip.yaml` `version:` use the tag name with any `v`/`V` prefix stripped,
      normalized to a numeric form like `x`, `x.y`, or `x.y.z` (e.g. tag
      `v1.4.1` → version `1.4.1`). The `source.yaml` `branch:` keeps the full
-     tag (`v1.4.1`). See [sedumi](packages/sedumi/1.3.8).
+     tag (`v1.4.1`). See [sedumi](https://github.com/mip-org/mip-core/tree/main/packages/sedumi/1.3.8).
    - **The default branch (`main` or `master`)** — when the project has no
      tags, or you specifically want the latest development tip. Use `main` or
      `master` literally as the release directory name, and leave `mip.yaml`
      `version:` blank. The daily scheduled probe will rebuild a branch-tracked
      package whenever the upstream branch advances. See
-     [spm](packages/spm/master), [cmocean](packages/cmocean/main).
+     [spm](https://github.com/mip-org/mip-core/tree/main/packages/spm/master), [cmocean](https://github.com/mip-org/mip-core/tree/main/packages/cmocean/main).
 
    See Step 3/4 for the exact version rules the prepare step enforces.
 
@@ -98,16 +98,24 @@ Things to determine:
    - All `.m` files at the repo root → `paths: [{path: "."}]`
    - A `matlab/` subdirectory → `paths: [{path: "matlab"}]`
    - A nested toolbox tree where every directory matters →
-     `paths: [{path: ".", recursive: true}]` (see [flam](packages/flam))
+     `paths: [{path: ".", recursive: true}]` (see [flam](https://github.com/mip-org/mip-core/tree/main/packages/flam))
 
 5. **MEX / native code.** Look for `.c`, `.cpp`, `.cu`, `.f`, `.f90` files
    alongside MATLAB sources, or `mex` calls in the README/install
    instructions. If MEX compilation is required, you will need a `compile.m`
-   (Step 5). The architectures this channel can build are:
+   (Step 5). The full set of architectures CI can build is:
 
+   - `any` — pure MATLAB, built once and installable everywhere; no
+     compilation, so no `compile.m`.
    - `linux_x86_64`
    - `macos_arm64`
    - `windows_x86_64`
+   - `numbl_wasm` — a portable WebAssembly build produced with Emscripten
+     (`emcc`/`em++`) and exercised by the numbl runtime rather than MATLAB. It
+     ships a `.wasm` (plus `.numbl.js`) instead of a native MEX.
+
+   The three native MEX targets are `linux_x86_64`, `macos_arm64`, and
+   `windows_x86_64`.
 
    (`macos_x86_64` (Intel Mac) is **not** a CI-built architecture:
    MathWorks has [removed Intel-Mac support from `mpm`](https://github.com/mathworks-ref-arch/matlab-dockerfile/blob/main/MPM.md),
@@ -222,8 +230,8 @@ source:
   remove_dirs: [html, deprecated]   # optional — same semantics as the git form
 ```
 
-`subdirectory:` is **not** supported for zip sources. This channel currently
-sources everything from upstream git repositories.
+`subdirectory:` is **not** supported for zip sources. A git source is the
+common case; use a zip only when the project has no public git repo.
 
 ### Version rules (enforced by the prepare step)
 
@@ -252,7 +260,7 @@ So the two common shapes are:
   (`v1.4.1`) — git treats both the same for cloning.
 - `subdirectory:` is for repos that keep the MATLAB code under a nested folder
   (e.g. matGeom's code lives in `matGeom/` — see
-  [matgeom source.yaml](packages/matgeom/1.2.9/source.yaml)). Only with `git:`.
+  [matgeom source.yaml](https://github.com/mip-org/mip-core/blob/main/packages/matgeom/1.2.9/source.yaml)). Only with `git:`.
 - `remove_dirs:` trims trees that shouldn't ship at all — pre-rendered HTML
   docs, deprecated/legacy code, developer scaffolding, or vendored heavy
   third-party code that `compile.m` disables. For `tests/`, `examples/`, and
@@ -316,7 +324,7 @@ paths:
 `recursive: true` walks the tree and includes any directory with at least one
 `.m` file. Directories starting with `.`, `+` (namespaces), or `@` (classes)
 are excluded automatically — MATLAB discovers those without an explicit
-`addpath`. See [flam](packages/flam) for a recursive example.
+`addpath`. See [flam](https://github.com/mip-org/mip-core/tree/main/packages/flam) for a recursive example.
 
 ### `extra_paths`
 
@@ -338,7 +346,7 @@ extra_paths:
 
 `mip load my_package` adds only the root; `mip load my_package --with examples`
 additionally puts `examples/` on the path. `tests`, `examples`, `benchmarks`
-are the conventional group names. See [sedumi](packages/sedumi/1.3.8/mip.yaml)
+are the conventional group names. See [sedumi](https://github.com/mip-org/mip-core/blob/main/packages/sedumi/1.3.8/mip.yaml)
 for an `extra_paths: examples:` example.
 
 ### `builds`
@@ -373,7 +381,7 @@ builds:
 ```
 
 **MEX-compiled, one test for all platforms** (see
-[sedumi](packages/sedumi/1.3.8/mip.yaml)):
+[sedumi](https://github.com/mip-org/mip-core/blob/main/packages/sedumi/1.3.8/mip.yaml)):
 
 ```yaml
 builds:
@@ -383,7 +391,7 @@ builds:
 ```
 
 **Separate Windows compile script** (see
-[fmmlib2d](packages/fmmlib2d/1.2.4/mip.yaml)):
+[fmmlib2d](https://github.com/mip-org/mip-core/blob/main/packages/fmmlib2d/1.2.4/mip.yaml)):
 
 ```yaml
 builds:
@@ -396,7 +404,7 @@ builds:
 ```
 
 **MEX where some platforms compile and others fall back to pure MATLAB** (see
-[spm](packages/spm/master/mip.yaml)):
+[spm](https://github.com/mip-org/mip-core/blob/main/packages/spm/master/mip.yaml)):
 
 ```yaml
 builds:
@@ -466,21 +474,21 @@ builds:
 
 Supported per architecture: `linux_x86_64` → `gcc`; `macos_*` → `gcc`, `clang`;
 `windows_x86_64` → `mingw`, `msvc`. See
-[gptoolbox/mip.yaml](packages/gptoolbox/master/mip.yaml) for a worked example.
+[gptoolbox/mip.yaml](https://github.com/mip-org/mip-core/blob/main/packages/gptoolbox/master/mip.yaml) for a worked example.
 
 ### Patterns from existing packages
 
 - Many single-file MEX linking MATLAB's BLAS (`-lmwblas`) —
-  [sedumi/compile.m](packages/sedumi/1.3.8/compile.m).
+  [sedumi/compile.m](https://github.com/mip-org/mip-core/blob/main/packages/sedumi/1.3.8/compile.m).
 - Fortran + a mwrap gateway, with a separate Windows script —
-  [fmmlib2d/compile.m](packages/fmmlib2d/1.2.4/compile.m) and
-  [fmmlib2d/compile_windows.m](packages/fmmlib2d/1.2.4/compile_windows.m).
+  [fmmlib2d/compile.m](https://github.com/mip-org/mip-core/blob/main/packages/fmmlib2d/1.2.4/compile.m) and
+  [fmmlib2d/compile_windows.m](https://github.com/mip-org/mip-core/blob/main/packages/fmmlib2d/1.2.4/compile_windows.m).
 - CMake + vcpkg with heavy features trimmed to fit CI, plus a `patchelf`
-  post-build pass — [gptoolbox/compile.m](packages/gptoolbox/master/compile.m).
+  post-build pass — [gptoolbox/compile.m](https://github.com/mip-org/mip-core/blob/main/packages/gptoolbox/master/compile.m).
 - Driving an upstream recursive Makefile on Linux/macOS, then reproducing the
   same build as direct `mex()` calls on Windows —
-  [spm/compile.m](packages/spm/master/compile.m) and
-  [spm/compile_windows.m](packages/spm/master/compile_windows.m).
+  [spm/compile.m](https://github.com/mip-org/mip-core/blob/main/packages/spm/master/compile.m) and
+  [spm/compile_windows.m](https://github.com/mip-org/mip-core/blob/main/packages/spm/master/compile_windows.m).
 
 ### Windows MEX
 
@@ -490,8 +498,8 @@ runtime statically**, so the resulting `.mexw64` carries no MinGW DLL
 dependency. The channel convention is to drive `mex()` **directly** from a
 `compile_windows.m` rather than rely on an upstream Unix Makefile (which assumes
 `sh`/`rm`/`mv`/`uname`). See
-[fmmlib2d/compile_windows.m](packages/fmmlib2d/1.2.4/compile_windows.m) for a
-small example and [spm/compile_windows.m](packages/spm/master/compile_windows.m)
+[fmmlib2d/compile_windows.m](https://github.com/mip-org/mip-core/blob/main/packages/fmmlib2d/1.2.4/compile_windows.m) for a
+small example and [spm/compile_windows.m](https://github.com/mip-org/mip-core/blob/main/packages/spm/master/compile_windows.m)
 for a large one (it reproduces an entire recursive-make build — a static
 archive built with MinGW `ar`, dozens of core MEX, and the bundled externals —
 as direct `mex` calls).
@@ -547,7 +555,7 @@ fails with `libmex.so: cannot open shared object file`. The fix is a post-build
 basename (`patchelf --replace-needed /abs/.../libmex.so libmex.so <file>`), and
 drop `libMatlabEngine.so` entirely (`--remove-needed`, since MATLAB doesn't add
 its dir to `LD_LIBRARY_PATH` and classic `mx*`/`mex*`-API code doesn't call it).
-See [gptoolbox/compile.m](packages/gptoolbox/master/compile.m) for a full block.
+See [gptoolbox/compile.m](https://github.com/mip-org/mip-core/blob/main/packages/gptoolbox/master/compile.m) for a full block.
 `patchelf` is installed by the build workflow's toolchain step, not in
 `compile.m`.
 
@@ -616,20 +624,20 @@ fprintf('SUCCESS\n');
 ### Covering many MEX
 
 For a handful of MEX, call each with a small deterministic input and `assert`
-the result (see [sedumi/test_sedumi_channel.m](packages/sedumi/1.3.8/test_sedumi_channel.m),
+the result (see [sedumi/test_sedumi_channel.m](https://github.com/mip-org/mip-core/blob/main/packages/sedumi/1.3.8/test_sedumi_channel.m),
 whose test was extended to exercise all 34 shipped MEX). For a package with
 *many* MEX across unrelated domains — where genuine functional inputs are
 impractical and some live in `private/` folders not callable by bare name — a
 dynamic sweep that force-loads every shipped MEX is appropriate: enumerate the
 `*.mex*` files, `cd` into each one's folder (so private/class-private MEX
 resolve), and invoke it once inside `try/catch`. See
-[spm/test_spm_mex.m](packages/spm/master/test_spm_mex.m), which keeps a few
+[spm/test_spm_mex.m](https://github.com/mip-org/mip-core/blob/main/packages/spm/master/test_spm_mex.m), which keeps a few
 genuine functional checks and adds the sweep for full coverage.
 
 > If a `compile.m` builds different MEX sets per platform (e.g. drops a couple
 > on Windows), the test must skip the same ones on those platforms so
 > `built == loaded` stays balanced — see the Windows split in
-> [gptoolbox](packages/gptoolbox/master).
+> [gptoolbox](https://github.com/mip-org/mip-core/tree/main/packages/gptoolbox/master).
 
 ### Two test scripts when you have a MEX build + `[any]` fallback
 
@@ -656,7 +664,7 @@ At minimum, document:
 - How to install and load via `mip` (copy-paste block):
 
   ```matlab
-  mip install --channel mip-org/dev <name>
+  mip install --channel <owner>/<channel> <name>
   mip load <name>
   ```
 
@@ -669,15 +677,15 @@ At minimum, document:
   which architectures get binaries and the fact that they're statically linked.
 - **Tests** — which `test_<…>.m` scripts ship and roughly what each exercises.
 
-See [sedumi/README.md](packages/sedumi/1.3.8/README.md) and
-[spm/README.md](packages/spm/master/README.md) for examples covering an
+See [sedumi/README.md](https://github.com/mip-org/mip-core/blob/main/packages/sedumi/1.3.8/README.md) and
+[spm/README.md](https://github.com/mip-org/mip-core/blob/main/packages/spm/master/README.md) for examples covering an
 architecture matrix, static linking, and a per-build test split.
 
 An `example.m` shows minimal end-to-end usage, beginning with the install/load
 line so a user can copy-paste it:
 
 ```matlab
-mip install --channel mip-org/dev my_package
+mip install --channel <owner>/<channel> my_package
 mip load my_package
 
 % ... example body ...
@@ -730,8 +738,8 @@ rm -rf build/
 
 ## Step 9 — Hand off for commit and push
 
-When you (the assistant working on this channel) finish writing the new files
-under `packages/<name>/<release>/`, **stop there**. Do **not** run `git add`,
+When you (the assistant adding a package to a channel) finish writing the new
+files under `packages/<name>/<release>/`, **stop there**. Do **not** run `git add`,
 `git commit`, or `git push` unless the user explicitly asks in the current
 turn. Summarize what you changed, point at the files, and let the user inspect
 and commit.
@@ -747,7 +755,7 @@ issue, or when an admin replies `approve` to one opened by someone else — see
 After the workflow completes, users install with:
 
 ```matlab
-mip install --channel mip-org/dev <name>
+mip install --channel <owner>/<channel> <name>
 mip load <name>
 mip test <name>      % if you provided a test_<name>.m
 ```
