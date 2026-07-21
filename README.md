@@ -96,7 +96,7 @@ on:
   workflow_dispatch:
     inputs:
       package_path: { required: true, type: string }
-      architecture: { required: true, type: choice, options: [any, linux_x86_64, macos_arm64, windows_x86_64] }
+      architecture: { required: true, type: string }  # any, linux_x86_64, macos_arm64, windows_x86_64, numbl_wasm
       force:        { type: boolean, default: false }
 permissions:
   contents: write
