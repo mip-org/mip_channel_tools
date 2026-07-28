@@ -1,0 +1,158 @@
+name: Prune Promoted Packages
+
+# Reusable workflow for queue-style channels (e.g. mip-staging): fully
+# retract every package release that has graduated to the target channel.
+# A release may be retracted iff BOTH (decided by `mip-channel
+# prune-promoted`):
+#
+#   1. its packages/<name>/<release> folder is byte-identical to the same
+#      path on the target channel's main (folders the channel lacks, or
+#      that differ — work in progress for a re-promotion — are kept); and
+#   2. the target channel finished publishing it: its index lists an .mhl
+#      for every architecture the package's mip.yaml declares.
+#
+# Retraction then removes the folder from main, deletes THIS channel's
+# GitHub Release for the package, and dispatches assemble-index so the
+# index and Pages site stop listing it. Everything is caller-side: this
+# workflow pushes to the repo that calls it, using that repo's own token,
+# and never writes to the channel it compares against.
+
+on:
+  workflow_call:
+    inputs:
+      channel_repo:
+        description: 'Channel repo to compare against, e.g. mip-org/mip-core'
+        required: true
+        type: string
+      channel_ref:
+        description: 'Ref of channel_repo to compare against'
+        type: string
+        default: main
+      dry_run:
+        description: 'Only report what would be retracted; do not touch anything'
+        type: boolean
+        default: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Checkout this channel (main)
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Checkout target channel
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.channel_repo }}
+          ref: ${{ inputs.channel_ref }}
+          path: _channel
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Decide what can be retracted
+        id: decide
+        env:
+          CHANNEL_REPO: ${{ inputs.channel_repo }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          mkdir -p .ci-tmp
+          python3 -m mip_channel_tools prune-promoted \
+            --channel-repo "$CHANNEL_REPO" \
+            --channel-root _channel \
+            --prune-file .ci-tmp/prune.tsv \
+            --summary-file .ci-tmp/summary.md
+          if [ -s .ci-tmp/prune.tsv ]; then
+            echo "prunable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prunable=false" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "## Retractable packages"
+            echo
+            if [ -s .ci-tmp/summary.md ]; then
+              cat .ci-tmp/summary.md
+            else
+              echo "None."
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo
+              echo "**Dry run — nothing was touched.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove package folders from main
+        if: steps.decide.outputs.prunable == 'true' && !inputs.dry_run
+        env:
+          CHANNEL_REPO: ${{ inputs.channel_repo }}
+        run: |
+          cut -f1 .ci-tmp/prune.tsv | xargs git rm -r -q --
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Prune packages promoted to $CHANNEL_REPO" \
+            -m "$(cut -f1 .ci-tmp/prune.tsv)"
+          # Something else may land on main between our checkout and push;
+          # rebase onto the new tip and retry. A pruned folder is deleted
+          # wholesale, so the rebase cannot conflict unless that same folder
+          # changed meanwhile — in which case failing (and re-deciding on
+          # the next run) is the right outcome.
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::push to main failed after $attempt attempts"
+              exit 1
+            fi
+            git fetch origin main
+            git rebase origin/main
+          done
+
+      - name: Delete this channel's releases
+        if: steps.decide.outputs.prunable == 'true' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # A leftover release whose deletion fails is invisible clutter, not
+          # an index problem: assemble-index only indexes releases backed by
+          # a packages/ folder, which the previous step just removed. So warn
+          # and continue rather than aborting the retraction midway.
+          failed=0
+          while IFS=$'\t' read -r pkg_path tag; do
+            [ -z "$tag" ] && continue
+            if ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+              echo "No release '$tag' to delete (never built here?)"
+              continue
+            fi
+            if gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag; then
+              echo "Deleted release '$tag'"
+            else
+              echo "::warning::Failed to delete release '$tag'"
+              failed=1
+            fi
+          done < .ci-tmp/prune.tsv
+          exit "$failed"
+
+      - name: Reassemble the index
+        if: steps.decide.outputs.prunable == 'true' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run assemble-index.yml --repo "$REPO"

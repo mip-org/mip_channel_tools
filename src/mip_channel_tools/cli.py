@@ -15,6 +15,7 @@ from . import (
     local_build,
     package_setup,
     prepare,
+    prune_promoted,
     scheduled,
     submit_package_request,
     upload,
@@ -35,6 +36,7 @@ def main(argv=None):
     index.register(subparsers)
     build_request.register(subparsers)
     submit_package_request.register(subparsers)
+    prune_promoted.register(subparsers)
     affected.register(subparsers)
     scheduled.register(subparsers)
     download_stats.register(subparsers)
