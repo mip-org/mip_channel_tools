@@ -361,7 +361,22 @@ jobs:
             echo "committed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "Promote $PACKAGE_PATH from $SOURCE_REPO"
-            git push origin main
+            # A concurrent promotion may land on main between our checkout and
+            # push; rebase onto the new tip and retry. Promotion commits only
+            # touch their own package folder, so the rebase cannot conflict
+            # unless the same release is promoted twice at once — in which
+            # case failing here is the right outcome.
+            for attempt in 1 2 3; do
+              if git push origin main; then
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "::error::push to main failed after $attempt attempts"
+                exit 1
+              fi
+              git fetch origin main
+              git rebase origin/main
+            done
             echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -401,12 +416,18 @@ jobs:
           PACKAGE_PATH: ${{ steps.spec.outputs.package_path }}
           SOURCE_REPO: ${{ steps.spec.outputs.source_repo }}
           COMMITTED: ${{ steps.commit.outputs.committed }}
+          COMMIT_RESULT: ${{ steps.commit.outcome }}
           DISPATCH_RESULT: ${{ steps.dispatch.outcome }}
         run: |
           if [ "$RESOLVED" != "true" ]; then
             errors=$(cat .ci-tmp/errors.md 2>/dev/null || true)
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
               --body $'Cannot promote — submission did not resolve:\n\n'"$errors"
+            exit 0
+          fi
+          if [ "$COMMIT_RESULT" = "failure" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body "Promotion failed — could not commit \`$PACKAGE_PATH\` onto \`main\`: $GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
           if [ "$DISPATCH_RESULT" != "success" ]; then
