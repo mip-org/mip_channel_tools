@@ -361,15 +361,18 @@ jobs:
           # copy, which the host process searches ahead of System32 (see
           # microsoft/STL#4730). cl.exe prepends the CL environment
           # variable's content to every invocation, and $GITHUB_ENV writes
-          # here are visible to every later step in this job -- so setting
-          # it once, before "Run package setup" (which runs `vcpkg install`
-          # for packages that declare it) and before "Bundle package" (where
-          # a package's own compile.m calls mex()/CMake), covers every
-          # Windows C/C++ compile in the job through one mechanism: vcpkg's
-          # own port builds, a package's own MEX, and a package's own
-          # CMake-driven build alike. Harmless to code that never
-          # constructs a std::mutex, so it is set unconditionally rather
-          # than per-package.
+          # here are visible to every later step in this job, so this one
+          # line covers a package's own Windows compiles in "Bundle package"
+          # -- both mex() calls and a CMake build it shells out to -- without
+          # each package listing the define itself. Harmless to code that
+          # never constructs a std::mutex, so it is set unconditionally.
+          #
+          # It does NOT cover `vcpkg install` port builds, even though those
+          # run in a later step with CL set: vcpkg scrubs the environment for
+          # port builds to keep its ABI hashes reproducible (only
+          # VCPKG_KEEP_ENV_VARS passthroughs survive; CL is not one). Ports
+          # get the define from the overlay triplets instead -- see
+          # vcpkg-triplets/x64-windows-static-md.cmake.
           echo "CL=/D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR" >> "$GITHUB_ENV"
 
       - name: Run package setup

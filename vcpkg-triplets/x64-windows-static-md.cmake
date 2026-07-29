@@ -15,13 +15,30 @@
 # the debug half roughly doubles a cold build for nothing. This only affects
 # `vcpkg install`; at consume time CMake's vcpkg toolchain just reads
 # installed/<triplet>/lib.
-#
-# (The MATLAB/MSVCP140 std::mutex compatibility define -- briefly set here as
-# VCPKG_C_FLAGS/VCPKG_CXX_FLAGS -- moved to the CL environment variable in
-# build-package.yml's "Prepare vcpkg environment (Windows)" step: CL reaches
-# every cl.exe invocation in the job, not just vcpkg's, so one place now
-# covers vcpkg installs AND a package's own mex()/CMake compiles.)
 set(VCPKG_TARGET_ARCHITECTURE x64)
 set(VCPKG_CRT_LINKAGE dynamic)
 set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_BUILD_TYPE release)
+
+# _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR: MSVC >= 14.40 (VS 17.10) makes
+# std::mutex's constructor constexpr; objects built that way fail at DLL
+# initialization ("Invalid MEX-file ... DLL initialization routine failed")
+# when the process already holds a pre-14.40 MSVCP140.dll -- and MATLAB
+# preloads its own, older copy (microsoft/STL#4730). Any C++ port with a
+# static std::mutex trips this, so cap the requirement here, where it covers
+# every vcpkg-built port.
+#
+# This must live in the TRIPLET, not in the CL environment variable that
+# build-package.yml sets for the rest of the job: vcpkg scrubs the
+# environment for port builds so its ABI hashes stay reproducible (only vars
+# on its VCPKG_KEEP_ENV_VARS passthrough list survive, and CL is not one), so
+# CL never reaches cl.exe inside `vcpkg install`. Verified the hard way --
+# with the define only in CL, pivlab's vcpkg-built OpenCV compiled without it
+# and opencv_undistort.mexw64 failed to load (mip-staging build 30483422648);
+# with it here, the same package went green (30403966289). CL still covers
+# what the triplet cannot: a package's own mex()/CMake compiles.
+#
+# NOTE: changing this file changes every port's vcpkg ABI hash -- existing
+# binary-cache entries are orphaned and everything rebuilds once.
+set(VCPKG_C_FLAGS "-D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR")
+set(VCPKG_CXX_FLAGS "-D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR")
