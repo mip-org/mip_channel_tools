@@ -42,9 +42,14 @@ fprintf('Testing: %s (package: %s)\n', files(1).name, pkg_name);
 % from the channel being built rather than the default mip-org/core. In CI,
 % repo 'owner/mip-<chan>' maps to channel 'owner/<chan>' (mip's index_url
 % convention). Locally (no GITHUB_REPOSITORY) fall back to the default.
+% A package published from its own repository (MIP_BUILD_MODE=repo) is not
+% a channel: install without --channel so bare-name dependencies resolve
+% as they will for users.
 installArgs = {mhl_path};
 repo = getenv('GITHUB_REPOSITORY');
-if ~isempty(repo)
+if strcmp(getenv('MIP_BUILD_MODE'), 'repo')
+    fprintf('Repo mode: resolving dependencies from the default channel\n');
+elseif ~isempty(repo)
     parts = strsplit(repo, '/');
     if numel(parts) == 2
         channel = sprintf('%s/%s', parts{1}, regexprep(parts{2}, '^mip-', ''));

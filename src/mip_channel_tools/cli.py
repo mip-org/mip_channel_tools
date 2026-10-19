@@ -16,6 +16,7 @@ from . import (
     package_setup,
     prepare,
     prune_promoted,
+    repo,
     scheduled,
     submit_package_request,
     upload,
@@ -40,6 +41,7 @@ def main(argv=None):
     affected.register(subparsers)
     scheduled.register(subparsers)
     download_stats.register(subparsers)
+    repo.register(subparsers)
 
     args = parser.parse_args(argv)
     return args.func(args) or 0

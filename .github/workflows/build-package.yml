@@ -13,14 +13,22 @@ run-name: "${{ inputs.package_path }} (${{ inputs.architecture }})${{ inputs.for
 # Reusable workflow: a channel's thin `build-package.yml` caller (which owns
 # the workflow_dispatch trigger and inputs) invokes this with `secrets: inherit`.
 # One run handles ONE (package_path, architecture) pair.
+#
+# mode: repo (MEP 10) is used by repo-build.yml for a package published from
+# its own repository. The package repo is checked out into pkgsrc/ at the
+# triggering commit, prepare takes the version and release tag explicitly,
+# the test installs without --channel, assets go to `release_tag`, and
+# assemble-and-deploy is skipped (repo-build.yml's index job replaces it).
 
 on:
   workflow_call:
     inputs:
       package_path:
+        # Required in channel mode; unused in repo mode.
         description: 'Release dir, e.g. packages/with_test/1.0.0'
-        required: true
+        required: false
         type: string
+        default: ''
       architecture:
         description: 'Target architecture'
         required: true
@@ -51,11 +59,27 @@ on:
         required: false
         type: boolean
         default: true
+      mode:
+        description: "'channel' (default) or 'repo' (package published from its own repository)"
+        required: false
+        type: string
+        default: 'channel'
+      version:
+        description: 'Repo mode: version to build, from the triggering ref'
+        required: false
+        type: string
+        default: ''
+      release_tag:
+        description: 'Repo mode: release to publish the assets to'
+        required: false
+        type: string
+        default: ''
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
+# No `permissions:` block: the jobs inherit the caller's token permissions.
+# A called workflow may not request more than its caller grants, even for a
+# job that is skipped, so declaring pages/id-token here would break repo-mode
+# callers that grant only `contents: write`. Channel callers grant contents,
+# pages, and id-token write, which is what this workflow used to declare.
 
 jobs:
   setup:
@@ -112,9 +136,20 @@ jobs:
         # The package source (packages/<name>/<release>/) comes from the
         # calling channel by default, or from `source_repo` for a
         # cross-channel submission test build.
+        if: inputs.mode != 'repo'
         uses: actions/checkout@v5
         with:
           repository: ${{ inputs.source_repo != '' && inputs.source_repo || github.repository }}
+
+      - name: Checkout package repository (repo mode)
+        # Into a subdirectory, so mip/, mip_channel_tools/, and build/ stay
+        # out of the package tree that prepare hashes and copies.
+        if: inputs.mode == 'repo'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: pkgsrc
+          submodules: recursive
 
       - name: Checkout mip
         uses: actions/checkout@v5
@@ -276,12 +311,30 @@ jobs:
           python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
 
       - name: Prepare package
+        if: inputs.mode != 'repo'
         env:
           BUILD_ARCHITECTURE: ${{ inputs.architecture }}
         shell: bash
         run: |
           python -m mip_channel_tools prepare \
             --package-path "${{ inputs.package_path }}" \
+            --architecture "${{ inputs.architecture }}" \
+            ${{ inputs.force && '--force' || '' }}
+
+      - name: Prepare package (repo mode)
+        if: inputs.mode == 'repo'
+        env:
+          BUILD_ARCHITECTURE: ${{ inputs.architecture }}
+          PKG_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          python -m mip_channel_tools prepare \
+            --source-dir pkgsrc \
+            --version "$PKG_VERSION" \
+            --release-tag "$RELEASE_TAG" \
+            --commit "$COMMIT_SHA" \
             --architecture "${{ inputs.architecture }}" \
             ${{ inputs.force && '--force' || '' }}
 
@@ -493,7 +546,12 @@ jobs:
     runs-on: ${{ needs.setup.outputs.runner }}
     steps:
       - name: Checkout repository
+        # Same source as the build job. Repo mode needs nothing from the
+        # package tree here (the test installs the downloaded .mhl).
+        if: inputs.mode != 'repo'
         uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.source_repo != '' && inputs.source_repo || github.repository }}
 
       - name: Checkout mip
         uses: actions/checkout@v5
@@ -776,6 +834,8 @@ jobs:
         # job. numbl_wasm is validated by the artifact smoke test below, not here.
         if: inputs.architecture != 'macos_arm64' && inputs.architecture != 'numbl_wasm'
         uses: matlab-actions/run-command@v3
+        env:
+          MIP_BUILD_MODE: ${{ inputs.mode }}
         with:
           command: "addpath('mip'); addpath('mip_channel_tools/scripts'); test_one"
 
@@ -792,7 +852,8 @@ jobs:
         # assertion (or a missing/invalid .wasm) makes `numbl eval` exit nonzero
         # and fails the job *before* the upload step below, so a broken bundle
         # is never published. The dependency channel is derived from the repo
-        # (owner/mip-<chan> -> owner/<chan>), mirroring scripts/test_one.m.
+        # (owner/mip-<chan> -> owner/<chan>), mirroring scripts/test_one.m;
+        # in repo mode the .mhl is installed without --channel.
         #
         # numbl runtime: built from the flatironinstitute/numbl `main` tip while
         # the numbl features this needs are still stabilizing (local-.mhl
@@ -803,6 +864,7 @@ jobs:
         shell: bash
         env:
           MIP_CONFIRM: 'y'
+          MIP_BUILD_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
 
@@ -820,7 +882,7 @@ jobs:
           mhl=$(realpath "$(ls build/bundled/*.mhl | head -n1)")
           name=$(node -e "const fs=require('fs');console.log(JSON.parse(fs.readFileSync(process.argv[1]+'.mip.json','utf8')).name)" "$mhl")
           install="mip('install','$mhl')"
-          if [ -n "${GITHUB_REPOSITORY:-}" ]; then
+          if [ "$MIP_BUILD_MODE" != "repo" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
             owner="${GITHUB_REPOSITORY%%/*}"
             chan="${GITHUB_REPOSITORY##*/}"; chan="${chan#mip-}"
             install="mip('install','--channel','${owner}/${chan}','$mhl')"
@@ -840,6 +902,8 @@ jobs:
         if: inputs.architecture == 'macos_arm64'
         continue-on-error: true
         uses: matlab-actions/run-command@v3
+        env:
+          MIP_BUILD_MODE: ${{ inputs.mode }}
         with:
           command: "addpath('mip'); addpath('mip_channel_tools/scripts'); try; test_one; fid = fopen('.tests_passed', 'w'); fclose(fid); catch err; disp(getReport(err)); exit(1); end"
 
@@ -874,11 +938,21 @@ jobs:
         #   URL for local testing. The index job is skipped, and `_test-builds`
         #   is never indexed (assemble-index only indexes tags backed by a
         #   packages/ folder in this channel).
+        # mode=repo: upload to `release_tag` (the triggering tag, or the
+        #   mip-index prerelease for branch builds; repo-build.yml's plan job
+        #   has already created it). --clobber replaces same-named assets.
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
-          if [ "${{ inputs.publish }}" = "true" ]; then
+          if [ "${{ inputs.mode }}" = "repo" ]; then
+            if [ "$RELEASE_TAG" = "mip-index" ]; then
+              python -m mip_channel_tools upload --release-tag "$RELEASE_TAG" --prerelease
+            else
+              python -m mip_channel_tools upload --release-tag "$RELEASE_TAG"
+            fi
+          elif [ "${{ inputs.publish }}" = "true" ]; then
             python -m mip_channel_tools upload
           else
             python -m mip_channel_tools upload --release-tag _test-builds --prerelease
@@ -889,8 +963,9 @@ jobs:
     needs: [build, test-and-upload]
     # Skipped for submission test builds (publish=false): the .mhl went to the
     # `_test-builds` prerelease, not the channel, so the index/Pages must not be
-    # rebuilt.
-    if: always() && inputs.publish && needs.build.result == 'success' && (needs.test-and-upload.result == 'success' || needs.test-and-upload.result == 'skipped')
+    # rebuilt. Also skipped in repo mode, where repo-build.yml's index job
+    # rebuilds index.json once after all architectures.
+    if: always() && inputs.publish && inputs.mode != 'repo' && needs.build.result == 'success' && (needs.test-and-upload.result == 'success' || needs.test-and-upload.result == 'skipped')
     runs-on: ubuntu-latest
     # Serialize Pages deploys across concurrent package builds.
     concurrency:

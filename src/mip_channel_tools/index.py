@@ -11,6 +11,12 @@ This command:
 6. Saves everything to build/gh-pages/ for GitHub Pages deployment
 
 This command should be run after `mip-channel upload`.
+
+Repo mode (`--repo-mode --package-name NAME`, MEP 10) is for a package
+published from its own repository: sidecars are collected from every
+non-draft release of the repository whose `name` is NAME (there is no
+packages/ tree to filter by), and the resulting index.json is uploaded to
+the `mip-index` prerelease instead of being staged for GitHub Pages.
 """
 
 import os
@@ -24,6 +30,7 @@ from datetime import datetime
 import yaml
 
 from .config import get_github_repo, get_base_url
+from .repo import INDEX_RELEASE_TAG, ensure_release
 
 
 def _version_sort_key(version_str):
@@ -232,6 +239,134 @@ class IndexAssembler:
                 shutil.copy2(src, dst)
             print(f"  Copied site/{entry}")
 
+    def _make_index_data(self, package_metadata, mip_compatibility_floor):
+        package_metadata.sort(key=_package_sort_key)
+        index_data = {
+            'github_repo': self.github_repo,
+            'packages': package_metadata,
+            'total_packages': len(package_metadata),
+            'last_updated': datetime.utcnow().isoformat() + 'Z'
+        }
+        if mip_compatibility_floor:
+            index_data['mip_compatibility_floor'] = mip_compatibility_floor
+        return index_data
+
+    def _list_published_releases(self):
+        """Tags of all non-draft releases. A draft's assets are not
+        publicly downloadable, so its sidecars must not enter the index."""
+        print(f"Listing releases in {self.github_repo}...")
+        result = subprocess.run(
+            ['gh', 'release', 'list',
+             '--repo', self.github_repo,
+             '--json', 'tagName,isDraft',
+             '--limit', '1000'],
+            capture_output=True, text=True, check=True
+        )
+        data = json.loads(result.stdout)
+        tags = [r['tagName'] for r in data if not r.get('isDraft')]
+        print(f"  Found {len(tags)} published release(s)")
+        return tags
+
+    def collect_repo_packages(self, package_name):
+        """Sidecars named `package_name` from all published releases.
+
+        If two releases carry the same (version, architecture), e.g. tags
+        `v1.2.0` and `1.2.0`, the entry with the later build timestamp
+        wins."""
+        release_tags = self._list_published_releases()
+        by_key = {}
+        skipped_names = set()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i, release_tag in enumerate(sorted(release_tags)):
+                try:
+                    assets = self._list_release_assets(release_tag)
+                except subprocess.CalledProcessError:
+                    print(f"  Warning: Could not list assets for release "
+                          f"'{release_tag}'")
+                    continue
+                # The same asset name can appear on two releases, so each
+                # release downloads into its own directory.
+                release_dir = os.path.join(tmpdir, str(i))
+                os.makedirs(release_dir)
+                mip_json_assets = [
+                    a for a in assets if a['name'].endswith('.mhl.mip.json')]
+                if not mip_json_assets:
+                    continue
+                print(f"\n  Release '{release_tag}': "
+                      f"{len(mip_json_assets)} .mip.json file(s)")
+                for asset in sorted(mip_json_assets, key=lambda a: a['name']):
+                    print(f"    {asset['name']}")
+                    metadata = self._download_mip_json(
+                        release_tag, asset['name'], release_dir)
+                    if not metadata:
+                        continue
+                    if metadata.get('name') != package_name:
+                        skipped_names.add(str(metadata.get('name')))
+                        continue
+                    key = (metadata.get('version'),
+                           metadata.get('architecture'))
+                    prev = by_key.get(key)
+                    if prev is not None:
+                        print(f"  Warning: {key[0]} ({key[1]}) is published "
+                              f"on more than one release; keeping the "
+                              f"newer build")
+                        if str(prev.get('timestamp', '')) >= \
+                                str(metadata.get('timestamp', '')):
+                            continue
+                    by_key[key] = metadata
+        if skipped_names:
+            print(f"  Ignored sidecars for other package names: "
+                  f"{', '.join(sorted(skipped_names))}")
+        return list(by_key.values())
+
+    def assemble_repo_index(self, package_name, mip_compatibility_floor=None,
+                            upload=True):
+        """Assemble and (optionally) upload a repo-mode index.json."""
+        if self.dry_run:
+            print("\n[DRY RUN] Would assemble the repository index.json "
+                  "from release assets")
+            return True
+
+        print(f"\nAssembling index for package '{package_name}' from "
+              f"GitHub Release assets...")
+        try:
+            package_metadata = self.collect_repo_packages(package_name)
+        except subprocess.CalledProcessError as e:
+            print(f"Error listing releases: {e}")
+            return False
+        print(f"\nCollected {len(package_metadata)} package metadata "
+              f"file(s) total")
+
+        floor = None
+        if mip_compatibility_floor:
+            floor = str(mip_compatibility_floor)
+            if not _is_numeric_version(floor):
+                print(f"  Warning: ignoring non-numeric "
+                      f"mip_compatibility_floor '{floor}'")
+                floor = None
+        index_data = self._make_index_data(package_metadata, floor)
+
+        out_dir = os.path.join(self.repo_root, 'build', 'repo-index')
+        os.makedirs(out_dir, exist_ok=True)
+        index_path = os.path.join(out_dir, 'index.json')
+        with open(index_path, 'w', encoding='utf-8') as f:
+            json.dump(index_data, f, indent=2)
+        print(f"  Saved to: {index_path}")
+
+        if not upload:
+            return True
+        try:
+            ensure_release(self.github_repo, INDEX_RELEASE_TAG)
+            subprocess.run(
+                ['gh', 'release', 'upload', INDEX_RELEASE_TAG, index_path,
+                 '--repo', self.github_repo, '--clobber'],
+                check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error uploading index.json: {e}")
+            return False
+        print(f"\n  Available at: {get_base_url(INDEX_RELEASE_TAG)}/index.json")
+        return True
+
     def assemble_index(self):
         """
         Assemble the package index from all .mip.json assets across all releases.
@@ -290,20 +425,10 @@ class IndexAssembler:
 
         print(f"\nCollected {len(package_metadata)} package metadata file(s) total")
 
-        # Sort packages
-        package_metadata.sort(key=_package_sort_key)
-
-        # Create index data
-        index_data = {
-            'github_repo': self.github_repo,
-            'packages': package_metadata,
-            'total_packages': len(package_metadata),
-            'last_updated': datetime.utcnow().isoformat() + 'Z'
-        }
-
         mip_compatibility_floor = self._read_mip_compatibility_floor()
+        index_data = self._make_index_data(
+            package_metadata, mip_compatibility_floor)
         if mip_compatibility_floor:
-            index_data['mip_compatibility_floor'] = mip_compatibility_floor
             print(f"  Channel requires mip >= {mip_compatibility_floor} "
                   f"(from channel.yaml)")
 
@@ -345,7 +470,16 @@ def run(args):
     if args.dry_run:
         print("[DRY RUN MODE - No actual downloading will occur]")
 
-    success = assembler.assemble_index()
+    if args.repo_mode:
+        if not args.package_name:
+            print("Error: --repo-mode requires --package-name")
+            return 2
+        success = assembler.assemble_repo_index(
+            args.package_name,
+            mip_compatibility_floor=args.mip_compatibility_floor,
+            upload=not args.no_upload)
+    else:
+        success = assembler.assemble_index()
 
     if success:
         print("\nDone: Index assembled successfully")
@@ -370,4 +504,19 @@ def register(subparsers):
         action='store_true',
         help='Simulate operations without downloading'
     )
+    parser.add_argument(
+        '--repo-mode', action='store_true',
+        help='Index a package published from its own repository and upload '
+             'index.json to the mip-index release (instead of staging '
+             'build/gh-pages).')
+    parser.add_argument(
+        '--package-name',
+        help='Repo mode: only sidecars with this package name are indexed.')
+    parser.add_argument(
+        '--mip-compatibility-floor', default=None,
+        help='Repo mode: optional mip_compatibility_floor for index.json.')
+    parser.add_argument(
+        '--no-upload', action='store_true',
+        help='Repo mode: write build/repo-index/index.json but do not '
+             'upload it.')
     parser.set_defaults(func=run)
