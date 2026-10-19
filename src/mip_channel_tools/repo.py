@@ -25,6 +25,13 @@ Subcommands:
     repo-ensure-release --tag TAG [--repository OWNER/REPO]
         Make sure the GitHub release for TAG exists. The `mip-index` release
         is created as a prerelease; any other tag must already exist.
+
+    repo-prune-branch-assets --package-name NAME --version VERSION
+                             --architectures JSON [--repository OWNER/REPO]
+        After a branch build, delete that branch's assets on the `mip-index`
+        release for architectures no longer built, so a stale build (e.g.
+        an `any` build left over after mip.yaml switched to native
+        architectures) does not stay in the index.
 """
 
 import json
@@ -247,6 +254,56 @@ def run_ensure_release(args):
     return 0
 
 
+def stale_branch_assets(asset_names, package_name, version, architectures):
+    """Asset names of the branch build `version` whose architecture is not
+    in `architectures`. Asset names are <name>-<version>-<arch>.mhl and
+    <name>-<version>-<arch>.mhl.mip.json, with '-' in the name written as
+    '_'. Architectures contain no '-', which keeps branch `main` from
+    matching the assets of a branch such as `main-dev`."""
+    prefix = f"{package_name.replace('-', '_')}-{version}-"
+    stale = []
+    for asset in asset_names:
+        if not asset.startswith(prefix):
+            continue
+        for suffix in ('.mhl.mip.json', '.mhl'):
+            if asset.endswith(suffix):
+                arch = asset[len(prefix):-len(suffix)]
+                if arch and '-' not in arch and arch not in architectures:
+                    stale.append(asset)
+                break
+    return stale
+
+
+def prune_branch_assets(repository, package_name, version, architectures):
+    r = subprocess.run(
+        ['gh', 'release', 'view', INDEX_RELEASE_TAG, '--repo', repository,
+         '--json', 'assets'],
+        capture_output=True, text=True, check=True)
+    names = [a['name'] for a in json.loads(r.stdout).get('assets', [])]
+    stale = stale_branch_assets(names, package_name, version, architectures)
+    for asset in stale:
+        print(f"Deleting stale asset {asset} from '{INDEX_RELEASE_TAG}'...")
+        subprocess.run(
+            ['gh', 'release', 'delete-asset', INDEX_RELEASE_TAG, asset,
+             '--repo', repository, '--yes'],
+            check=True)
+    if not stale:
+        print("No stale branch assets.")
+    return stale
+
+
+def run_prune_branch_assets(args):
+    repository = args.repository or get_github_repo()
+    try:
+        architectures = json.loads(args.architectures)
+        prune_branch_assets(repository, args.package_name, args.version,
+                            architectures)
+    except (ValueError, subprocess.CalledProcessError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def register(subparsers):
     p = subparsers.add_parser(
         "repo-plan",
@@ -274,3 +331,16 @@ def register(subparsers):
     e.add_argument('--repository',
                    help='owner/repo (default: $GITHUB_REPOSITORY)')
     e.set_defaults(func=run_ensure_release)
+
+    b = subparsers.add_parser(
+        "repo-prune-branch-assets",
+        help="Delete a branch build's assets for architectures no longer "
+             "built.")
+    b.add_argument('--package-name', required=True)
+    b.add_argument('--version', required=True,
+                   help='Branch version, e.g. main')
+    b.add_argument('--architectures', required=True,
+                   help='JSON list of the architectures built')
+    b.add_argument('--repository',
+                   help='owner/repo (default: $GITHUB_REPOSITORY)')
+    b.set_defaults(func=run_prune_branch_assets)

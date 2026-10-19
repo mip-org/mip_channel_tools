@@ -257,3 +257,38 @@ def test_ensure_release_restores_index_prerelease(monkeypatch):
     repo.ensure_release('o/chunkie', INDEX_RELEASE_TAG)
     assert [c[2] for c in gh.calls] == ['view', 'edit']
     assert gh.releases[INDEX_RELEASE_TAG]['isPrerelease']
+
+
+# --- stale branch assets -----------------------------------------------------
+
+def test_stale_branch_assets():
+    assets = [
+        'my_pkg-main-any.mhl', 'my_pkg-main-any.mhl.mip.json',
+        'my_pkg-main-linux_x86_64.mhl', 'my_pkg-main-linux_x86_64.mhl.mip.json',
+        'my_pkg-main-dev-any.mhl',            # branch main-dev, not main
+        'my_pkg-other-any.mhl',               # another branch
+        'index.json',
+    ]
+    stale = repo.stale_branch_assets(
+        assets, 'my-pkg', 'main', ['linux_x86_64'])
+    assert stale == ['my_pkg-main-any.mhl', 'my_pkg-main-any.mhl.mip.json']
+
+
+def test_prune_branch_assets_deletes_stale(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[2] == 'view':
+            out = json.dumps({'assets': [
+                {'name': 'p-main-any.mhl'}, {'name': 'p-main-any.mhl.mip.json'},
+                {'name': 'p-main-macos_arm64.mhl'}, {'name': 'index.json'}]})
+            return subprocess.CompletedProcess(cmd, 0, out, '')
+        assert cmd[2] == 'delete-asset'
+        return subprocess.CompletedProcess(cmd, 0, '', '')
+
+    monkeypatch.setattr(repo.subprocess, 'run', fake_run)
+    stale = repo.prune_branch_assets('o/p', 'p', 'main', ['macos_arm64'])
+    assert stale == ['p-main-any.mhl', 'p-main-any.mhl.mip.json']
+    deleted = [c[4] for c in calls if c[2] == 'delete-asset']
+    assert deleted == stale
