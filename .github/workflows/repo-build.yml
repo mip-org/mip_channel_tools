@@ -2,7 +2,7 @@ name: mip repo build
 
 # Reusable workflow for a package published from its own GitHub repository
 # (MEP 10). The package repo keeps mip.yaml at its root and has a thin caller,
-# e.g. .github/workflows/mip.yml:
+# e.g. .github/workflows/repo-build.yml:
 #
 #   on:
 #     push:

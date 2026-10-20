@@ -141,7 +141,7 @@ the caller's `uses:` line.
 
 ## Use from a package's own repository
 
-A package can also be published from its own GitHub repository, without a channel ([MEP 10](https://github.com/mip-org/meps/blob/main/meps/mep-0010.md)). The repository keeps `mip.yaml` at its root and adds one caller workflow, e.g. `.github/workflows/mip.yml`:
+A package can also be published from its own GitHub repository, without a channel ([MEP 10](https://github.com/mip-org/meps/blob/main/meps/mep-0010.md)). The repository keeps `mip.yaml` at its root and adds one caller workflow, e.g. `.github/workflows/repo-build.yml`:
 
 ```yaml
 name: mip
