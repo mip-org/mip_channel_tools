@@ -32,6 +32,12 @@ The source is the given checkout (no source.yaml, no overlay). `.git` is
 excluded from the copy and the source hash, the commit is recorded as
 .commit_hash and mixed into the source hash, and the skip check looks for
 an existing sidecar on <tag> rather than on the per-package release.
+
+If the upstream source can't be reached (git ls-remote/clone or a download
+fails) but an .mhl for this release and architecture is already published,
+prepare exits SOURCE_UNREACHABLE (3) without producing output, so the
+scheduled check can report a warning instead of a failure. If nothing is
+published yet, it exits 1 as before.
 """
 
 import os
@@ -43,6 +49,9 @@ import subprocess
 import requests
 import yaml
 from .config import get_base_url, release_tag_from_mhl
+
+# Exit code: the source host is unreachable, but the release is published.
+SOURCE_UNREACHABLE = 3
 
 
 def _rmtree_on_error(func, path, exc_info):
@@ -315,6 +324,48 @@ def check_existing_package(mhl_filename, source_hash, mip_yaml,
     return True
 
 
+def is_published(mhl_filename):
+    """Return True if any .mhl with this filename is on the channel.
+
+    Unlike check_existing_package this ignores the source hash, which
+    can't be computed when the upstream source is unreachable."""
+    release_tag = release_tag_from_mhl(mhl_filename)
+    mip_json_url = f"{get_base_url(release_tag)}/{mhl_filename}.mip.json"
+    try:
+        response = requests.get(mip_json_url, timeout=10)
+    except requests.RequestException as e:
+        print(f"  Error checking published package: {e}")
+        return False
+    return response.status_code == 200
+
+
+def _source_unreachable(error, release_folder, package_name,
+                        release_version, architecture):
+    """Exit code for a source fetch that failed with `error`."""
+    stderr = getattr(error, 'stderr', None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', errors='replace')
+    if stderr:
+        print(stderr, file=sys.stderr)
+    print(f"  Error: could not reach the upstream source: {error}",
+          file=sys.stderr)
+
+    # The channel's mip.yaml (if any) gives the published name; otherwise
+    # the package directory name, which prepare requires to match.
+    name = package_name
+    channel_mip_yaml = os.path.join(release_folder, 'mip.yaml')
+    if os.path.exists(channel_mip_yaml):
+        name = read_mip_yaml(channel_mip_yaml).get('name') or name
+    mhl_filename = (
+        f"{name.replace('-', '_')}-{release_version}-{architecture}.mhl")
+
+    if is_published(mhl_filename):
+        print(f"  {mhl_filename} is already published; keeping it. "
+              f"Could not check it against the upstream source.")
+        return SOURCE_UNREACHABLE
+    return 1
+
+
 def fetch_source(recipe, target_dir):
     source = recipe.get('source')
     if not source:
@@ -488,8 +539,13 @@ def run(args):
     remote_hashes = []
     source = recipe.get('source') or {}
     if 'git' in source and source.get('branch'):
-        commit_hash = resolve_git_commit_hash(
-            source['git'], source['branch'])
+        try:
+            commit_hash = resolve_git_commit_hash(
+                source['git'], source['branch'])
+        except subprocess.CalledProcessError as e:
+            return _source_unreachable(
+                e, release_folder, package_name, release_version,
+                args.architecture)
         print(f"  Resolved {source['git']} {source['branch']} -> "
               f"{commit_hash[:12]}")
         remote_hashes.append(commit_hash)
@@ -511,7 +567,13 @@ def run(args):
     os.makedirs(temp_dir)
 
     try:
-        fetch_source(recipe, temp_dir)
+        try:
+            fetch_source(recipe, temp_dir)
+        except (subprocess.CalledProcessError,
+                requests.RequestException) as e:
+            return _source_unreachable(
+                e, release_folder, package_name, release_version,
+                args.architecture)
         overlay_channel_files(release_folder, temp_dir)
         mip_yaml_path = os.path.join(temp_dir, 'mip.yaml')
         if not os.path.exists(mip_yaml_path):
