@@ -147,3 +147,154 @@ def test_unquoted_numeric_yaml_version_ok(tmp_path):
     validate_channel_version_rules(path, {}, "1.5")
     with pytest.raises(ValueError, match="must equal"):
         validate_channel_version_rules(path, {}, "1.6")
+
+
+# --- Repo mode (MEP 10) -------------------------------------------------------
+
+from mip_channel_tools import cli
+from mip_channel_tools import prepare as prepare_mod
+
+
+def _make_repo(root):
+    """A package checkout with a .git directory and a submodule gitlink."""
+    os.makedirs(os.path.join(root, ".git", "objects"))
+    with open(os.path.join(root, ".git", "HEAD"), "w") as f:
+        f.write("ref: refs/heads/main\n")
+    with open(os.path.join(root, "mip.yaml"), "w") as f:
+        f.write('name: chunkie\nversion: "1.2.0"\n'
+                'builds:\n  - architectures: [any]\n')
+    os.makedirs(os.path.join(root, "src", "sub"))
+    with open(os.path.join(root, "src", "a.m"), "w") as f:
+        f.write("a")
+    with open(os.path.join(root, "src", "sub", ".git"), "w") as f:
+        f.write("gitdir: ../../.git/modules/sub\n")
+
+
+def _prepare_repo(tmp_path, *extra):
+    return cli.main([
+        "prepare", "--source-dir", str(tmp_path / "pkgsrc"),
+        "--version", "1.2.0", "--release-tag", "v1.2.0",
+        "--commit", "abc123", "--architecture", "any",
+        "--output-dir", str(tmp_path / "prepared"), *extra])
+
+
+def test_repo_mode_prepare(tmp_path, monkeypatch):
+    _make_repo(str(tmp_path / "pkgsrc"))
+    seen = {}
+
+    def fake_check(mhl_filename, source_hash, mip_yaml, release_version,
+                   release_tag=None):
+        seen.update(mhl=mhl_filename, tag=release_tag,
+                    version=release_version)
+        return False
+
+    monkeypatch.setattr(prepare_mod, "check_existing_package", fake_check)
+    assert _prepare_repo(tmp_path) == 0
+    assert seen == {"mhl": "chunkie-1.2.0-any.mhl", "tag": "v1.2.0",
+                    "version": "1.2.0"}
+
+    out = tmp_path / "prepared" / "chunkie-1.2.0"
+    assert (out / "mip.yaml").is_file()
+    assert (out / "src" / "a.m").is_file()
+    assert not (out / ".git").exists()
+    assert not (out / "src" / "sub" / ".git").exists()
+    assert (out / ".release_version").read_text() == "1.2.0"
+    assert (out / ".commit_hash").read_text() == "abc123"
+    tree_hash = compute_directory_hash(
+        str(tmp_path / "pkgsrc"), exclude=(".git",))
+    assert (out / ".source_hash").read_text() == \
+        prepare_mod.combine_hashes(tree_hash, ["abc123"])
+
+
+def test_repo_mode_prepare_skips_when_published(tmp_path, monkeypatch):
+    _make_repo(str(tmp_path / "pkgsrc"))
+    monkeypatch.setattr(prepare_mod, "check_existing_package",
+                        lambda *a, **k: True)
+    assert _prepare_repo(tmp_path) == 0
+    assert not (tmp_path / "prepared" / "chunkie-1.2.0").exists()
+
+    # --force bypasses the check.
+    assert _prepare_repo(tmp_path, "--force") == 0
+    assert (tmp_path / "prepared" / "chunkie-1.2.0").is_dir()
+
+
+def test_repo_mode_prepare_arch_not_declared(tmp_path, monkeypatch):
+    _make_repo(str(tmp_path / "pkgsrc"))
+    monkeypatch.setattr(prepare_mod, "check_existing_package",
+                        lambda *a, **k: False)
+    rc = cli.main([
+        "prepare", "--source-dir", str(tmp_path / "pkgsrc"),
+        "--version", "1.2.0", "--release-tag", "v1.2.0",
+        "--architecture", "linux_x86_64",
+        "--output-dir", str(tmp_path / "prepared")])
+    assert rc == 0
+    assert not (tmp_path / "prepared").exists()
+
+
+def test_repo_mode_prepare_version_mismatch(tmp_path):
+    _make_repo(str(tmp_path / "pkgsrc"))
+    with pytest.raises(ValueError, match="must equal"):
+        cli.main([
+            "prepare", "--source-dir", str(tmp_path / "pkgsrc"),
+            "--version", "2.0.0", "--release-tag", "v2.0.0",
+            "--architecture", "any",
+            "--output-dir", str(tmp_path / "prepared")])
+
+
+def test_repo_mode_prepare_requires_version_and_tag(tmp_path):
+    _make_repo(str(tmp_path / "pkgsrc"))
+    rc = cli.main([
+        "prepare", "--source-dir", str(tmp_path / "pkgsrc"),
+        "--architecture", "any"])
+    assert rc == 2
+
+
+def test_repo_mode_prepare_rejects_output_inside_source(tmp_path):
+    _make_repo(str(tmp_path / "pkgsrc"))
+    rc = cli.main([
+        "prepare", "--source-dir", str(tmp_path / "pkgsrc"),
+        "--version", "1.2.0", "--release-tag", "v1.2.0",
+        "--architecture", "any",
+        "--output-dir", str(tmp_path / "pkgsrc" / "build" / "prepared")])
+    assert rc == 2
+
+
+def test_directory_hash_exclude_ignores_git(tmp_path):
+    root = tmp_path / "pkgsrc"
+    _make_repo(str(root))
+    before = compute_directory_hash(str(root), exclude=(".git",))
+    with open(os.path.join(str(root), ".git", "HEAD"), "w") as f:
+        f.write("changed\n")
+    with open(os.path.join(str(root), "src", "sub", ".git"), "w") as f:
+        f.write("changed\n")
+    assert compute_directory_hash(str(root), exclude=(".git",)) == before
+    # Without the exclusion (channel mode) .git content still counts.
+    assert compute_directory_hash(str(root)) != before
+
+
+def test_channel_mode_requires_package_path():
+    assert cli.main(["prepare", "--architecture", "any"]) == 2
+
+
+def test_check_existing_package_uses_given_release_tag(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/chunkie")
+    urls = []
+
+    class Resp:
+        status_code = 404
+
+    def fake_get(url, timeout):
+        urls.append(url)
+        return Resp()
+
+    monkeypatch.setattr(prepare_mod.requests, "get", fake_get)
+    prepare_mod.check_existing_package(
+        "chunkie-main-any.mhl", "h", {}, "main", release_tag="mip-index")
+    prepare_mod.check_existing_package(
+        "chunkie-main-any.mhl", "h", {}, "main")
+    assert urls == [
+        "https://github.com/o/chunkie/releases/download/mip-index/"
+        "chunkie-main-any.mhl.mip.json",
+        "https://github.com/o/chunkie/releases/download/chunkie-main/"
+        "chunkie-main-any.mhl.mip.json",
+    ]

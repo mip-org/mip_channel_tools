@@ -1,0 +1,185 @@
+name: mip repo build
+
+# Reusable workflow for a package published from its own GitHub repository
+# (MEP 10). The package repo keeps mip.yaml at its root and has a thin caller,
+# e.g. .github/workflows/repo-build.yml:
+#
+#   on:
+#     push:
+#       tags: ['v*']
+#       branches: [main]      # optional: publish a rolling "main" build
+#     workflow_dispatch:
+#   permissions:
+#     contents: write
+#   jobs:
+#     mip:
+#       uses: mip-org/mip_channel_tools/.github/workflows/repo-build.yml@main
+#       secrets: inherit
+#
+# Three jobs:
+#   1. plan  - version from the triggering ref (tag v1.2.0 / 1.2.0 -> 1.2.0,
+#              other tags literal, branch -> branch name), mip.yaml checks,
+#              build matrix, and the release the assets go to (the tag's
+#              release, created if only the tag exists, or the `mip-index`
+#              prerelease for branch builds).
+#   2. build - build-package.yml in repo mode, once per architecture.
+#   3. index - once after the matrix: regenerate index.json from the sidecars
+#              of all releases and upload it to the `mip-index` prerelease.
+#
+# workflow_dispatch from a tag ref rebuilds that tag; from a branch ref it
+# rebuilds that branch. With `index_only: true` nothing is built and only the
+# index is regenerated (e.g. after deleting a release).
+
+on:
+  workflow_call:
+    inputs:
+      index_only:
+        description: 'Skip building; only regenerate index.json'
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: 'Rebuild even if a matching build is already published'
+        required: false
+        type: boolean
+        default: false
+      mip_compatibility_floor:
+        description: 'Optional minimum mip version, recorded in index.json'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      package_name: ${{ steps.plan.outputs.package_name }}
+    steps:
+      - name: Checkout package repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: pkgsrc
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      - name: Plan
+        id: plan
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python -m mip_channel_tools repo-plan \
+            --source-dir pkgsrc \
+            --ref-type "$REF_TYPE" \
+            --ref-name "$REF_NAME" \
+            ${{ inputs.index_only && '--index-only' || '' }}
+
+      # Created here, once, rather than by each architecture's upload, so the
+      # parallel build jobs do not race to create it.
+      - name: Ensure release exists
+        if: steps.plan.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.plan.outputs.release_tag }}
+        run: python -m mip_channel_tools repo-ensure-release --tag "$RELEASE_TAG"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    # Builds of the same version and architecture (e.g. two quick pushes to
+    # main) run one at a time. The group alone runs them in the order they
+    # reach it, not push order; build-package.yml's repo-mode prepare step
+    # skips a branch build whose commit is no longer the branch head, so an
+    # older commit cannot overwrite a newer build's assets on mip-index.
+    concurrency:
+      group: mip-build-${{ github.repository }}-${{ needs.plan.outputs.version }}-${{ matrix.architecture }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # Referenced explicitly rather than as ./.github/workflows/..., since a
+    # local reference inside a workflow called from another repository is
+    # not guaranteed to resolve to this repository.
+    uses: mip-org/mip_channel_tools/.github/workflows/build-package.yml@main
+    with:
+      mode: repo
+      architecture: ${{ matrix.architecture }}
+      version: ${{ needs.plan.outputs.version }}
+      release_tag: ${{ needs.plan.outputs.release_tag }}
+      force: ${{ inputs.force }}
+    secrets: inherit
+
+  index:
+    needs: [plan, build]
+    # Runs after an index-only plan (build skipped) and after a build in
+    # which some architectures failed, so whatever was published is indexed.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    # One index rewrite at a time per repository. A newer pending run replaces
+    # an older pending one, which is harmless: every run regenerates the index
+    # from all releases.
+    concurrency:
+      group: mip-index-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Checkout channel tooling
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: mip_channel_tools
+      - name: Install channel tooling
+        run: python -m pip install "$GITHUB_WORKSPACE/mip_channel_tools"
+
+      # A branch build replaces its assets on the mip-index release, but an
+      # architecture dropped from mip.yaml would leave its old build behind
+      # and in the index.
+      - name: Remove stale branch assets
+        if: needs.plan.outputs.build == 'true' && needs.plan.outputs.release_tag == 'mip-index'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.plan.outputs.package_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          python -m mip_channel_tools repo-prune-branch-assets \
+            --package-name "$PACKAGE_NAME" \
+            --version "$VERSION" \
+            --architectures "$MATRIX"
+
+      - name: Assemble and upload index.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.plan.outputs.package_name }}
+          MIP_COMPATIBILITY_FLOOR: ${{ inputs.mip_compatibility_floor }}
+        run: |
+          python -m mip_channel_tools assemble-index \
+            --repo-mode \
+            --package-name "$PACKAGE_NAME" \
+            --mip-compatibility-floor "$MIP_COMPATIBILITY_FLOOR"

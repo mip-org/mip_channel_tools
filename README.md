@@ -13,7 +13,8 @@ This was extracted from the channel repos (it previously lived under their
 
 - `.github/workflows/` — **reusable workflows** (`workflow_call`) that channels
   invoke: `build-package`, `assemble-index`, `push-build`, `scheduled-build`,
-  `build-request`, `submit-package-request`.
+  `build-request`, `submit-package-request`, and `repo-build` (for a package
+  published from its own repository; see below).
 - `src/mip_channel_tools/` — the `mip-channel` CLI (Python package).
 - `scripts/` — MATLAB build helpers (`bundle_one.m`, `test_one.m`, ...).
 - `mexopts/` — MEX compiler configs per architecture.
@@ -45,6 +46,12 @@ mip-channel submit-package-request resolve --dispatch-file <path> [--errors-file
 mip-channel submit-package-request spec --output-file <path>
 mip-channel affected --changed-files <path> --dispatch-file <path>
 mip-channel scheduled-check --dispatch-file <path> [--summary-file <path>]
+
+# repo mode (a package published from its own repository)
+mip-channel repo-plan --source-dir <checkout> --ref-type tag|branch --ref-name <name> [--index-only]
+mip-channel repo-ensure-release --tag <tag>
+mip-channel prepare --source-dir <checkout> --version <version> --release-tag <tag> [--commit <sha>] --architecture <arch>
+mip-channel assemble-index --repo-mode --package-name <name> [--mip-compatibility-floor <version>] [--no-upload]
 ```
 
 Commands that read the channel tree (`assemble-index`, `affected`,
@@ -131,3 +138,48 @@ the caller's `uses:` line.
 > The tooling checkout needs `git` on PATH. GitHub-hosted runners have it; the
 > Linux build container (`mathworks/matlab-deps:*-ubi8`) installs it
 > (`dnf install -y git`) before checkout, so it is available there too.
+
+## Use from a package's own repository
+
+A package can also be published from its own GitHub repository, without a channel ([MEP 10](https://github.com/mip-org/meps/blob/main/meps/mep-0010.md)). The repository keeps `mip.yaml` at its root and adds one caller workflow, e.g. `.github/workflows/repo-build.yml`:
+
+```yaml
+name: mip
+on:
+  push:
+    tags: ['v*']
+    branches: [main]      # optional: publish a rolling "main" build
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mip:
+    uses: mip-org/mip_channel_tools/.github/workflows/repo-build.yml@main
+    secrets: inherit      # optional: passes MIP_CACHE_TOKEN for the Windows vcpkg cache
+```
+
+The repository must be public. `repo-build.yml` runs three jobs:
+
+1. **plan** determines the version from the triggering ref. A tag `v1.2.0` or `1.2.0` builds version `1.2.0` (the leading `v` is stripped only when the rest is numeric); any other tag is published under its literal name; a branch builds a version named after the branch. It fails before building if `mip.yaml`'s `name` does not match the repository name (compared case-insensitively, with `-` and `_` equivalent), or if `mip.yaml` declares a numeric `version` that differs from the tag's. The build matrix is the `builds[].architectures` of `mip.yaml` intersected with the architectures CI can build.
+2. **build** runs `build-package.yml` with `mode: repo` once per architecture. The package is checked out into `pkgsrc/` at the triggering commit, which is recorded as the build's `commit_hash`. Tag builds attach their `.mhl` and `.mhl.mip.json` assets to the tag's GitHub release (created if only the tag exists). Branch builds attach them to the `mip-index` prerelease, replacing the previous build's assets. A build whose sidecar is already published with the same source hash and commit is skipped.
+3. **index** regenerates `index.json` from the sidecars of all non-draft releases and uploads it to the `mip-index` prerelease, where the mip client fetches it from `https://github.com/<owner>/<repo>/releases/download/mip-index/index.json`. The index has the same schema as a channel index.
+
+A `workflow_dispatch` from a tag rebuilds that tag, and one from a branch rebuilds that branch. To expose the reusable workflow's other inputs, declare them on the caller and pass them through:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      index_only: { type: boolean, default: false }
+      force:      { type: boolean, default: false }
+jobs:
+  mip:
+    uses: mip-org/mip_channel_tools/.github/workflows/repo-build.yml@main
+    with:
+      index_only: ${{ inputs.index_only == true }}   # only regenerate index.json
+      force: ${{ inputs.force == true }}             # rebuild even if published
+      mip_compatibility_floor: '1.2.0'               # optional, as in channel.yaml
+    secrets: inherit
+```
+
+`index_only` is useful after deleting a release, since the index is rebuilt from whatever releases exist. `macos_x86_64` is not built in repo mode, since `local-build` supports only channels.

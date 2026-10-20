@@ -22,6 +22,16 @@ the package's mip.yaml, the command exits 0 without producing output
 If --force is not set and a matching .mhl already exists on the channel's
 GitHub Releases (matching source hash and metadata), prepare exits 0
 without producing output, signalling "nothing to do".
+
+Repo mode (MEP 10: a package published from its own repository):
+  mip-channel prepare \
+      --source-dir pkgsrc --version <version> --release-tag <tag> \
+      [--commit <sha>] --architecture <arch>
+
+The source is the given checkout (no source.yaml, no overlay). `.git` is
+excluded from the copy and the source hash, the commit is recorded as
+.commit_hash and mixed into the source hash, and the skip check looks for
+an existing sidecar on <tag> rather than on the per-package release.
 """
 
 import os
@@ -168,11 +178,13 @@ def resolve_git_commit_hash(url, ref):
     raise RuntimeError(f"Could not resolve ref '{ref}' for {url}")
 
 
-def compute_directory_hash(directory):
+def compute_directory_hash(directory, exclude=()):
+    """SHA-1 over relative paths and contents. Directories and files whose
+    name is in `exclude` (e.g. '.git') are skipped at every level."""
     sha1 = hashlib.sha1()
     for root, dirs, files in os.walk(directory):
-        dirs.sort()
-        files.sort()
+        dirs[:] = sorted(d for d in dirs if d not in exclude)
+        files = sorted(f for f in files if f not in exclude)
         for filename in files:
             file_path = os.path.join(root, filename)
             # Normalise the path separator to '/' so the hash is identical
@@ -226,32 +238,35 @@ def is_numeric_version(s):
     return all(p.isdigit() for p in parts) and len(parts) >= 1
 
 
-def validate_channel_version_rules(mip_yaml_path, recipe, release_version):
-    """See mip's docs/specification.md §11.2.1 for the rules."""
-    if 'version' in recipe:
-        raise ValueError(
-            "source.yaml must not contain a 'version' field "
-            "(release dir is the version)")
-
-    with open(mip_yaml_path, 'r') as f:
-        mip_yaml = yaml.safe_load(f) or {}
+def check_mip_yaml_version(mip_yaml, release_version):
+    """mip.yaml version rules (mip's docs/specification.md §11.2.1),
+    shared by channel and repo mode."""
     mv = str(mip_yaml.get('version') or '').strip()
 
     if mv and not is_numeric_version(mv):
         raise ValueError(
             f"mip.yaml 'version' must be blank or numeric, got {mv!r}.")
 
-    # A numeric release directory must match mip.yaml's version when one is
-    # set. A non-numeric release directory (e.g. a branch name like 'main')
+    # A numeric release version must match mip.yaml's version when one is
+    # set. A non-numeric release version (e.g. a branch name like 'main')
     # is always allowed and takes precedence over mip.yaml's version.
     if mv and is_numeric_version(release_version) and release_version != mv:
         raise ValueError(
-            f"Numeric release directory {release_version!r} must equal "
+            f"Numeric release version {release_version!r} must equal "
             f"mip.yaml version {mv!r}.")
 
 
+def validate_channel_version_rules(mip_yaml_path, recipe, release_version):
+    """See mip's docs/specification.md §11.2.1 for the rules."""
+    if 'version' in recipe:
+        raise ValueError(
+            "source.yaml must not contain a 'version' field "
+            "(release dir is the version)")
+    check_mip_yaml_version(read_mip_yaml(mip_yaml_path), release_version)
+
+
 def read_mip_yaml(mip_yaml_path):
-    with open(mip_yaml_path, 'r') as f:
+    with open(mip_yaml_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f) or {}
 
 
@@ -264,9 +279,13 @@ def architectures_from_mip_yaml(mip_yaml):
 
 
 def check_existing_package(mhl_filename, source_hash, mip_yaml,
-                           release_version):
-    """Return True if a matching package is already published."""
-    release_tag = release_tag_from_mhl(mhl_filename)
+                           release_version, release_tag=None):
+    """Return True if a matching package is already published.
+
+    The sidecar is looked up on `release_tag`, or on the per-package tag
+    derived from the filename when none is given."""
+    if release_tag is None:
+        release_tag = release_tag_from_mhl(mhl_filename)
     base_url = get_base_url(release_tag)
     mip_json_url = f"{base_url}/{mhl_filename}.mip.json"
 
@@ -331,9 +350,111 @@ def fetch_source(recipe, target_dir):
         os.chdir(original_dir)
 
 
+def combine_hashes(source_hash, remote_hashes):
+    combined = hashlib.sha1()
+    combined.update(source_hash.encode('utf-8'))
+    for h in sorted(remote_hashes):
+        combined.update(h.encode('utf-8'))
+    return combined.hexdigest()
+
+
+def _prepare_release(args, mip_yaml, release_version, source_hash, commit,
+                     output_dir, populate, release_tag=None):
+    """Shared tail of both modes: architecture and skip checks, then the
+    prepared dir, filled by `populate(out_path)` (out_path does not exist
+    yet) plus the side files."""
+    archs = architectures_from_mip_yaml(mip_yaml)
+    if args.architecture not in archs:
+        print(f"  Architecture {args.architecture!r} not in {sorted(archs)}; "
+              f"nothing to prepare for this arch.")
+        return 0
+
+    name_for_filename = mip_yaml['name'].replace('-', '_')
+    mhl_filename = (
+        f"{name_for_filename}-{release_version}-{args.architecture}.mhl")
+
+    if not args.force and check_existing_package(
+            mhl_filename, source_hash, mip_yaml, release_version,
+            release_tag=release_tag):
+        where = f" on '{release_tag}'" if release_tag else ''
+        print(f"  {mhl_filename} already published{where} with matching "
+              f"hash; skipping.")
+        return 0
+
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(
+        output_dir, f"{mip_yaml['name']}-{release_version}")
+    if os.path.exists(out_path):
+        shutil.rmtree(out_path, onerror=_rmtree_on_error)
+    populate(out_path)
+
+    with open(os.path.join(out_path, '.release_version'), 'w') as f:
+        f.write(release_version)
+    with open(os.path.join(out_path, '.source_hash'), 'w') as f:
+        f.write(source_hash)
+    if commit:
+        with open(os.path.join(out_path, '.commit_hash'), 'w') as f:
+            f.write(commit)
+
+    print(f"  Prepared: {out_path}")
+    print(f"  Expected output: {mhl_filename}")
+    return 0
+
+
+def run_repo_mode(args):
+    source_dir = os.path.abspath(args.source_dir)
+    if not os.path.isdir(source_dir):
+        print(f"Error: source dir not found: {source_dir}", file=sys.stderr)
+        return 2
+    if not args.version or not args.release_tag:
+        print("Error: --source-dir requires --version and --release-tag",
+              file=sys.stderr)
+        return 2
+    release_version = args.version
+
+    output_dir = os.path.abspath(args.output_dir or os.path.join(
+        os.path.abspath(os.curdir), 'build', 'prepared'))
+    if os.path.commonpath([output_dir, source_dir]) == source_dir:
+        print(f"Error: output dir {output_dir} is inside the source dir "
+              f"{source_dir}", file=sys.stderr)
+        return 2
+
+    mip_yaml_path = os.path.join(source_dir, 'mip.yaml')
+    if not os.path.exists(mip_yaml_path):
+        print(f"Error: no mip.yaml in {source_dir}", file=sys.stderr)
+        return 1
+    mip_yaml = read_mip_yaml(mip_yaml_path)
+    check_mip_yaml_version(mip_yaml, release_version)
+
+    print(f"Package: {mip_yaml.get('name')}")
+    print(f"Release: {release_version} (release tag {args.release_tag})")
+    print(f"Architecture: {args.architecture}")
+
+    source_hash = compute_directory_hash(source_dir, exclude=('.git',))
+    if args.commit:
+        print(f"  Commit: {args.commit}")
+        source_hash = combine_hashes(source_hash, [args.commit])
+    print(f"  Source hash: {source_hash}")
+
+    def populate(out_path):
+        shutil.copytree(source_dir, out_path,
+                        ignore=shutil.ignore_patterns('.git'))
+
+    return _prepare_release(
+        args, mip_yaml, release_version, source_hash, args.commit,
+        output_dir, populate, release_tag=args.release_tag)
+
+
 def run(args):
     if not args.architecture:
         print("Error: --architecture or $BUILD_ARCHITECTURE required",
+              file=sys.stderr)
+        return 2
+
+    if args.source_dir:
+        return run_repo_mode(args)
+    if not args.package_path:
+        print("Error: --package-path or --source-dir required",
               file=sys.stderr)
         return 2
 
@@ -374,11 +495,7 @@ def run(args):
         remote_hashes.append(commit_hash)
 
     if remote_hashes:
-        combined = hashlib.sha1()
-        combined.update(source_hash.encode('utf-8'))
-        for h in sorted(remote_hashes):
-            combined.update(h.encode('utf-8'))
-        source_hash = combined.hexdigest()
+        source_hash = combine_hashes(source_hash, remote_hashes)
     print(f"  Source hash: {source_hash}")
 
     output_dir = args.output_dir or os.path.join(
@@ -403,47 +520,19 @@ def run(args):
         validate_channel_version_rules(
             mip_yaml_path, recipe, release_version)
         mip_yaml = read_mip_yaml(mip_yaml_path)
-        archs = architectures_from_mip_yaml(mip_yaml)
     finally:
         shutil.rmtree(temp_dir, onerror=_rmtree_on_error)
 
-    if args.architecture not in archs:
-        print(f"  Architecture {args.architecture!r} not in {sorted(archs)}; "
-              f"nothing to prepare for this arch.")
-        return 0
+    def populate(out_path):
+        os.makedirs(out_path)
+        fetch_source(recipe, out_path)
+        overlay_channel_files(release_folder, out_path)
+        validate_channel_version_rules(
+            os.path.join(out_path, 'mip.yaml'), recipe, release_version)
 
-    name_for_filename = mip_yaml['name'].replace('-', '_')
-    mhl_filename = (
-        f"{name_for_filename}-{release_version}-{args.architecture}.mhl")
-
-    if not args.force and check_existing_package(
-            mhl_filename, source_hash, mip_yaml, release_version):
-        print(f"  {mhl_filename} already published with matching hash; "
-              f"skipping.")
-        return 0
-
-    out_name = f"{mip_yaml['name']}-{release_version}"
-    out_path = os.path.join(output_dir, out_name)
-    if os.path.exists(out_path):
-        shutil.rmtree(out_path, onerror=_rmtree_on_error)
-    os.makedirs(out_path)
-
-    fetch_source(recipe, out_path)
-    overlay_channel_files(release_folder, out_path)
-    validate_channel_version_rules(
-        os.path.join(out_path, 'mip.yaml'), recipe, release_version)
-
-    with open(os.path.join(out_path, '.release_version'), 'w') as f:
-        f.write(release_version)
-    with open(os.path.join(out_path, '.source_hash'), 'w') as f:
-        f.write(source_hash)
-    if remote_hashes:
-        with open(os.path.join(out_path, '.commit_hash'), 'w') as f:
-            f.write(remote_hashes[0])
-
-    print(f"  Prepared: {out_path}")
-    print(f"  Expected output: {mhl_filename}")
-    return 0
+    return _prepare_release(
+        args, mip_yaml, release_version, source_hash,
+        remote_hashes[0] if remote_hashes else None, output_dir, populate)
 
 
 def register(subparsers):
@@ -451,7 +540,7 @@ def register(subparsers):
         "prepare",
         help="Prepare a single package release for one architecture.")
     parser.add_argument(
-        '--package-path', required=True,
+        '--package-path',
         help='Path to the release dir, e.g. packages/<name>/<release>')
     parser.add_argument(
         '--architecture',
@@ -461,4 +550,20 @@ def register(subparsers):
     parser.add_argument(
         '--output-dir',
         help='Output dir (default: build/prepared)')
+    parser.add_argument(
+        '--source-dir',
+        help='Repo mode: package checkout to build (instead of '
+             '--package-path)')
+    parser.add_argument(
+        '--version',
+        help='Repo mode: version to publish (from the triggering ref)')
+    parser.add_argument(
+        '--release-tag',
+        help='Repo mode: release the assets are published to (checked for '
+             'an existing sidecar)')
+    parser.add_argument(
+        '--commit',
+        default=os.environ.get('GITHUB_SHA'),
+        help='Repo mode: commit being built, recorded as .commit_hash '
+             '(default: $GITHUB_SHA)')
     parser.set_defaults(func=run)
