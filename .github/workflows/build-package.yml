@@ -330,6 +330,18 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
         shell: bash
         run: |
+          # A branch build skips (prepares nothing) once the branch has moved
+          # past this commit: the newer push's build publishes instead, so an
+          # older commit cannot overwrite it on the mip-index release. Fails
+          # open if the branch head cannot be read.
+          if [ "$RELEASE_TAG" = "mip-index" ]; then
+            head=$(git -C pkgsrc ls-remote origin "refs/heads/$GITHUB_REF_NAME" \
+              | awk -v ref="refs/heads/$GITHUB_REF_NAME" '$2 == ref { print $1 }')
+            if [ -n "$head" ] && [ "$head" != "$COMMIT_SHA" ]; then
+              echo "Branch $GITHUB_REF_NAME has moved to $head; skipping build of $COMMIT_SHA."
+              exit 0
+            fi
+          fi
           python -m mip_channel_tools prepare \
             --source-dir pkgsrc \
             --version "$PKG_VERSION" \

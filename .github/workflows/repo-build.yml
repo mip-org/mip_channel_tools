@@ -107,8 +107,10 @@ jobs:
     needs: plan
     if: needs.plan.outputs.build == 'true'
     # Builds of the same version and architecture (e.g. two quick pushes to
-    # main) run one at a time, so an older commit cannot finish last and
-    # overwrite a newer build's assets on the mip-index release.
+    # main) run one at a time. The group alone runs them in the order they
+    # reach it, not push order; build-package.yml's repo-mode prepare step
+    # skips a branch build whose commit is no longer the branch head, so an
+    # older commit cannot overwrite a newer build's assets on mip-index.
     concurrency:
       group: mip-build-${{ github.repository }}-${{ needs.plan.outputs.version }}-${{ matrix.architecture }}
       cancel-in-progress: false
