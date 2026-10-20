@@ -44,7 +44,7 @@ import yaml
 
 from .build_request import arches_from_mip_config
 from .config import get_github_repo
-from .prepare import is_numeric_version
+from .prepare import check_mip_yaml_version, is_numeric_version
 
 
 INDEX_RELEASE_TAG = 'mip-index'
@@ -109,14 +109,10 @@ def check_package_name(mip_yaml, repository):
 
 def check_version(mip_yaml, version, ref_type, ref_name):
     """Channel version rules (mip spec §11.2.1) applied to the ref version."""
-    mv = str(mip_yaml.get('version') or '').strip()
-    if mv and not is_numeric_version(mv):
-        raise PlanError(
-            f"mip.yaml 'version' must be blank or numeric, got {mv!r}")
-    if mv and is_numeric_version(version) and version != mv:
-        raise PlanError(
-            f"{ref_type} {ref_name!r} gives version {version!r}, but "
-            f"mip.yaml declares version {mv!r}")
+    try:
+        check_mip_yaml_version(mip_yaml, version)
+    except ValueError as e:
+        raise PlanError(f"{ref_type} {ref_name!r}: {e}") from e
 
 
 def plan(source_dir, repository, ref_type, ref_name, index_only=False):

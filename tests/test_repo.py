@@ -89,7 +89,7 @@ def test_plan_branch_build(tmp_path):
 
 def test_plan_tag_version_mismatch_fails(tmp_path):
     src = _write_mip_yaml(tmp_path / 'pkgsrc', BASIC)
-    with pytest.raises(PlanError, match="mip.yaml declares version '1.2.0'"):
+    with pytest.raises(PlanError, match="must equal mip.yaml version '1.2.0'"):
         plan(src, 'fastalgorithms/chunkie', 'tag', 'v1.3.0')
 
 

@@ -76,9 +76,14 @@ class IndexAssembler:
         self.site_dir = os.path.abspath(site_dir) if site_dir \
             else os.path.join(self.repo_root, 'site')
 
-    def _list_all_releases(self):
+    def _list_all_releases(self, exclude_drafts=False):
         """
         List all releases in the repo.
+
+        Args:
+            exclude_drafts: Skip draft releases. A draft's assets are not
+                publicly downloadable, so repo mode keeps its sidecars out
+                of the index.
 
         Returns:
             List of release tag names
@@ -88,13 +93,14 @@ class IndexAssembler:
         result = subprocess.run(
             ['gh', 'release', 'list',
              '--repo', self.github_repo,
-             '--json', 'tagName',
+             '--json', 'tagName,isDraft',
              '--limit', '1000'],
             capture_output=True, text=True, check=True
         )
 
         data = json.loads(result.stdout)
-        tags = [r['tagName'] for r in data]
+        tags = [r['tagName'] for r in data
+                if not (exclude_drafts and r.get('isDraft'))]
         print(f"  Found {len(tags)} release(s)")
         return tags
 
@@ -251,29 +257,13 @@ class IndexAssembler:
             index_data['mip_compatibility_floor'] = mip_compatibility_floor
         return index_data
 
-    def _list_published_releases(self):
-        """Tags of all non-draft releases. A draft's assets are not
-        publicly downloadable, so its sidecars must not enter the index."""
-        print(f"Listing releases in {self.github_repo}...")
-        result = subprocess.run(
-            ['gh', 'release', 'list',
-             '--repo', self.github_repo,
-             '--json', 'tagName,isDraft',
-             '--limit', '1000'],
-            capture_output=True, text=True, check=True
-        )
-        data = json.loads(result.stdout)
-        tags = [r['tagName'] for r in data if not r.get('isDraft')]
-        print(f"  Found {len(tags)} published release(s)")
-        return tags
-
     def collect_repo_packages(self, package_name):
         """Sidecars named `package_name` from all published releases.
 
         If two releases carry the same (version, architecture), e.g. tags
         `v1.2.0` and `1.2.0`, the entry with the later build timestamp
         wins."""
-        release_tags = self._list_published_releases()
+        release_tags = self._list_all_releases(exclude_drafts=True)
         by_key = {}
         skipped_names = set()
         with tempfile.TemporaryDirectory() as tmpdir:

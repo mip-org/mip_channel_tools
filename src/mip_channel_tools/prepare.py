@@ -238,28 +238,31 @@ def is_numeric_version(s):
     return all(p.isdigit() for p in parts) and len(parts) >= 1
 
 
-def validate_channel_version_rules(mip_yaml_path, recipe, release_version):
-    """See mip's docs/specification.md §11.2.1 for the rules."""
-    if 'version' in recipe:
-        raise ValueError(
-            "source.yaml must not contain a 'version' field "
-            "(release dir is the version)")
-
-    with open(mip_yaml_path, 'r', encoding='utf-8') as f:
-        mip_yaml = yaml.safe_load(f) or {}
+def check_mip_yaml_version(mip_yaml, release_version):
+    """mip.yaml version rules (mip's docs/specification.md §11.2.1),
+    shared by channel and repo mode."""
     mv = str(mip_yaml.get('version') or '').strip()
 
     if mv and not is_numeric_version(mv):
         raise ValueError(
             f"mip.yaml 'version' must be blank or numeric, got {mv!r}.")
 
-    # A numeric release directory must match mip.yaml's version when one is
-    # set. A non-numeric release directory (e.g. a branch name like 'main')
+    # A numeric release version must match mip.yaml's version when one is
+    # set. A non-numeric release version (e.g. a branch name like 'main')
     # is always allowed and takes precedence over mip.yaml's version.
     if mv and is_numeric_version(release_version) and release_version != mv:
         raise ValueError(
-            f"Numeric release directory {release_version!r} must equal "
+            f"Numeric release version {release_version!r} must equal "
             f"mip.yaml version {mv!r}.")
+
+
+def validate_channel_version_rules(mip_yaml_path, recipe, release_version):
+    """See mip's docs/specification.md §11.2.1 for the rules."""
+    if 'version' in recipe:
+        raise ValueError(
+            "source.yaml must not contain a 'version' field "
+            "(release dir is the version)")
+    check_mip_yaml_version(read_mip_yaml(mip_yaml_path), release_version)
 
 
 def read_mip_yaml(mip_yaml_path):
@@ -355,6 +358,49 @@ def combine_hashes(source_hash, remote_hashes):
     return combined.hexdigest()
 
 
+def _prepare_release(args, mip_yaml, release_version, source_hash, commit,
+                     output_dir, populate, release_tag=None):
+    """Shared tail of both modes: architecture and skip checks, then the
+    prepared dir, filled by `populate(out_path)` (out_path does not exist
+    yet) plus the side files."""
+    archs = architectures_from_mip_yaml(mip_yaml)
+    if args.architecture not in archs:
+        print(f"  Architecture {args.architecture!r} not in {sorted(archs)}; "
+              f"nothing to prepare for this arch.")
+        return 0
+
+    name_for_filename = mip_yaml['name'].replace('-', '_')
+    mhl_filename = (
+        f"{name_for_filename}-{release_version}-{args.architecture}.mhl")
+
+    if not args.force and check_existing_package(
+            mhl_filename, source_hash, mip_yaml, release_version,
+            release_tag=release_tag):
+        where = f" on '{release_tag}'" if release_tag else ''
+        print(f"  {mhl_filename} already published{where} with matching "
+              f"hash; skipping.")
+        return 0
+
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(
+        output_dir, f"{mip_yaml['name']}-{release_version}")
+    if os.path.exists(out_path):
+        shutil.rmtree(out_path, onerror=_rmtree_on_error)
+    populate(out_path)
+
+    with open(os.path.join(out_path, '.release_version'), 'w') as f:
+        f.write(release_version)
+    with open(os.path.join(out_path, '.source_hash'), 'w') as f:
+        f.write(source_hash)
+    if commit:
+        with open(os.path.join(out_path, '.commit_hash'), 'w') as f:
+            f.write(commit)
+
+    print(f"  Prepared: {out_path}")
+    print(f"  Expected output: {mhl_filename}")
+    return 0
+
+
 def run_repo_mode(args):
     source_dir = os.path.abspath(args.source_dir)
     if not os.path.isdir(source_dir):
@@ -377,18 +423,12 @@ def run_repo_mode(args):
     if not os.path.exists(mip_yaml_path):
         print(f"Error: no mip.yaml in {source_dir}", file=sys.stderr)
         return 1
-    validate_channel_version_rules(mip_yaml_path, {}, release_version)
     mip_yaml = read_mip_yaml(mip_yaml_path)
+    check_mip_yaml_version(mip_yaml, release_version)
 
     print(f"Package: {mip_yaml.get('name')}")
     print(f"Release: {release_version} (release tag {args.release_tag})")
     print(f"Architecture: {args.architecture}")
-
-    archs = architectures_from_mip_yaml(mip_yaml)
-    if args.architecture not in archs:
-        print(f"  Architecture {args.architecture!r} not in {sorted(archs)}; "
-              f"nothing to prepare for this arch.")
-        return 0
 
     source_hash = compute_directory_hash(source_dir, exclude=('.git',))
     if args.commit:
@@ -396,36 +436,13 @@ def run_repo_mode(args):
         source_hash = combine_hashes(source_hash, [args.commit])
     print(f"  Source hash: {source_hash}")
 
-    name_for_filename = mip_yaml['name'].replace('-', '_')
-    mhl_filename = (
-        f"{name_for_filename}-{release_version}-{args.architecture}.mhl")
+    def populate(out_path):
+        shutil.copytree(source_dir, out_path,
+                        ignore=shutil.ignore_patterns('.git'))
 
-    if not args.force and check_existing_package(
-            mhl_filename, source_hash, mip_yaml, release_version,
-            release_tag=args.release_tag):
-        print(f"  {mhl_filename} already published on '{args.release_tag}' "
-              f"with matching hash; skipping.")
-        return 0
-
-    os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(
-        output_dir, f"{mip_yaml['name']}-{release_version}")
-    if os.path.exists(out_path):
-        shutil.rmtree(out_path, onerror=_rmtree_on_error)
-    shutil.copytree(source_dir, out_path,
-                    ignore=shutil.ignore_patterns('.git'))
-
-    with open(os.path.join(out_path, '.release_version'), 'w') as f:
-        f.write(release_version)
-    with open(os.path.join(out_path, '.source_hash'), 'w') as f:
-        f.write(source_hash)
-    if args.commit:
-        with open(os.path.join(out_path, '.commit_hash'), 'w') as f:
-            f.write(args.commit)
-
-    print(f"  Prepared: {out_path}")
-    print(f"  Expected output: {mhl_filename}")
-    return 0
+    return _prepare_release(
+        args, mip_yaml, release_version, source_hash, args.commit,
+        output_dir, populate, release_tag=args.release_tag)
 
 
 def run(args):
@@ -503,47 +520,19 @@ def run(args):
         validate_channel_version_rules(
             mip_yaml_path, recipe, release_version)
         mip_yaml = read_mip_yaml(mip_yaml_path)
-        archs = architectures_from_mip_yaml(mip_yaml)
     finally:
         shutil.rmtree(temp_dir, onerror=_rmtree_on_error)
 
-    if args.architecture not in archs:
-        print(f"  Architecture {args.architecture!r} not in {sorted(archs)}; "
-              f"nothing to prepare for this arch.")
-        return 0
+    def populate(out_path):
+        os.makedirs(out_path)
+        fetch_source(recipe, out_path)
+        overlay_channel_files(release_folder, out_path)
+        validate_channel_version_rules(
+            os.path.join(out_path, 'mip.yaml'), recipe, release_version)
 
-    name_for_filename = mip_yaml['name'].replace('-', '_')
-    mhl_filename = (
-        f"{name_for_filename}-{release_version}-{args.architecture}.mhl")
-
-    if not args.force and check_existing_package(
-            mhl_filename, source_hash, mip_yaml, release_version):
-        print(f"  {mhl_filename} already published with matching hash; "
-              f"skipping.")
-        return 0
-
-    out_name = f"{mip_yaml['name']}-{release_version}"
-    out_path = os.path.join(output_dir, out_name)
-    if os.path.exists(out_path):
-        shutil.rmtree(out_path, onerror=_rmtree_on_error)
-    os.makedirs(out_path)
-
-    fetch_source(recipe, out_path)
-    overlay_channel_files(release_folder, out_path)
-    validate_channel_version_rules(
-        os.path.join(out_path, 'mip.yaml'), recipe, release_version)
-
-    with open(os.path.join(out_path, '.release_version'), 'w') as f:
-        f.write(release_version)
-    with open(os.path.join(out_path, '.source_hash'), 'w') as f:
-        f.write(source_hash)
-    if remote_hashes:
-        with open(os.path.join(out_path, '.commit_hash'), 'w') as f:
-            f.write(remote_hashes[0])
-
-    print(f"  Prepared: {out_path}")
-    print(f"  Expected output: {mhl_filename}")
-    return 0
+    return _prepare_release(
+        args, mip_yaml, release_version, source_hash,
+        remote_hashes[0] if remote_hashes else None, output_dir, populate)
 
 
 def register(subparsers):
