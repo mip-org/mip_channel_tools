@@ -298,3 +298,72 @@ def test_check_existing_package_uses_given_release_tag(monkeypatch):
         "https://github.com/o/chunkie/releases/download/chunkie-main/"
         "chunkie-main-any.mhl.mip.json",
     ]
+
+
+def _unreachable_release(tmp_path, with_channel_mip_yaml=True):
+    """A packages/<name>/<release> dir whose git source can't be reached."""
+    release = tmp_path / "packages" / "my-pkg" / "3.1"
+    release.mkdir(parents=True)
+    (release / "source.yaml").write_text(
+        'source:\n  git: "https://example.invalid/repo"\n  branch: "v3.1"\n')
+    if with_channel_mip_yaml:
+        (release / "mip.yaml").write_text("name: my-pkg\n")
+    return release
+
+
+def _run_prepare(release, tmp_path):
+    import argparse
+    from mip_channel_tools import prepare as prep
+    args = argparse.Namespace(
+        package_path=str(release), source_dir=None, architecture="any",
+        force=False,
+        output_dir=str(tmp_path / "out"))
+    return prep.run(args)
+
+
+def _unreachable_ls_remote(monkeypatch):
+    import subprocess
+    from mip_channel_tools import prepare as prep
+
+    def fail(url, ref):
+        raise subprocess.CalledProcessError(
+            128, ["git", "ls-remote", url, ref],
+            stderr="fatal: remote-curl: bad line length character: <!do")
+    monkeypatch.setattr(prep, "resolve_git_commit_hash", fail)
+
+
+def test_unreachable_source_already_published(tmp_path, monkeypatch):
+    # Upstream host down or behind a bot check (as with mmess on
+    # 2026-10-20): a published release is kept and reported, not failed.
+    from mip_channel_tools import prepare as prep
+    _unreachable_ls_remote(monkeypatch)
+    checked = []
+    monkeypatch.setattr(
+        prep, "is_published", lambda mhl: checked.append(mhl) or True)
+    release = _unreachable_release(tmp_path)
+    assert _run_prepare(release, tmp_path) == prep.SOURCE_UNREACHABLE
+    assert checked == ["my_pkg-3.1-any.mhl"]
+    assert not (tmp_path / "out").exists()
+
+
+def test_unreachable_source_not_published_fails(tmp_path, monkeypatch):
+    from mip_channel_tools import prepare as prep
+    _unreachable_ls_remote(monkeypatch)
+    monkeypatch.setattr(prep, "is_published", lambda mhl: False)
+    release = _unreachable_release(tmp_path, with_channel_mip_yaml=False)
+    assert _run_prepare(release, tmp_path) == 1
+
+
+def test_unreachable_clone_already_published(tmp_path, monkeypatch):
+    # A recipe without `branch` skips ls-remote; the clone fails instead.
+    import subprocess
+    from mip_channel_tools import prepare as prep
+
+    def fail(recipe, target_dir):
+        raise subprocess.CalledProcessError(128, ["git", "clone"])
+    monkeypatch.setattr(prep, "fetch_source", fail)
+    monkeypatch.setattr(prep, "is_published", lambda mhl: True)
+    release = _unreachable_release(tmp_path)
+    (release / "source.yaml").write_text(
+        'source:\n  git: "https://example.invalid/repo"\n')
+    assert _run_prepare(release, tmp_path) == prep.SOURCE_UNREACHABLE

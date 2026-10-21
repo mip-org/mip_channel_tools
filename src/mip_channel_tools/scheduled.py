@@ -14,6 +14,12 @@ Failures of prepare itself (e.g. transient git/network errors) are
 recorded in the summary and cause the command to exit non-zero, but the
 dispatch file still lists every pair that was successfully determined
 to need a build.
+
+One exception: when the upstream source is unreachable but the pair is
+already published (prepare exits SOURCE_UNREACHABLE), the pair is
+recorded as a warning and does not fail the command. One flaky or
+bot-protected upstream host should not turn the daily run red when there
+is nothing it could rebuild anyway.
 """
 
 import shutil
@@ -25,10 +31,13 @@ from .build_request import (
     candidate_arches,
     list_all_packages,
 )
+from .prepare import SOURCE_UNREACHABLE
 
 
 def probe_pair(repo_root, pkg_path, arch, probe_dir):
-    """Run prepare for one (pkg, arch). Returns (needs_build, error_or_None)."""
+    """Run prepare for one (pkg, arch).
+
+    Returns (needs_build, error_or_None, unreachable)."""
     if probe_dir.exists():
         shutil.rmtree(probe_dir)
     probe_dir.mkdir(parents=True)
@@ -40,14 +49,16 @@ def probe_pair(repo_root, pkg_path, arch, probe_dir):
         "--output-dir", str(probe_dir),
     ]
     result = subprocess.run(cmd, cwd=str(repo_root))
+    if result.returncode == SOURCE_UNREACHABLE:
+        return False, None, True
     if result.returncode != 0:
-        return False, f"prepare exited {result.returncode}"
+        return False, f"prepare exited {result.returncode}", False
 
     # prepare writes "<name>-<version>/" into the output dir on success,
     # and nothing on a clean "already up to date" / "arch not declared" exit.
     # _temp_* dirs are cleaned by prepare in its finally block.
     entries = [e for e in probe_dir.iterdir() if not e.name.startswith("_temp_")]
-    return bool(entries), None
+    return bool(entries), None, False
 
 
 def run(args):
@@ -57,12 +68,22 @@ def run(args):
     needs = []
     summary = []
     failed_pairs = []
+    unreachable_pairs = []
 
     for pkg_path in list_all_packages(repo_root):
         archs = candidate_arches(repo_root / pkg_path)
         for arch in archs:
             print(f"\n=== Probing {pkg_path} ({arch}) ===", flush=True)
-            needs_build, err = probe_pair(repo_root, pkg_path, arch, probe_dir)
+            needs_build, err, unreachable = probe_pair(
+                repo_root, pkg_path, arch, probe_dir)
+            if unreachable:
+                summary.append(
+                    f"- `{pkg_path}` (`{arch}`) — source unreachable; "
+                    f"published copy kept")
+                unreachable_pairs.append((pkg_path, arch))
+                print(f"::warning::{pkg_path} ({arch}): upstream source "
+                      f"unreachable; published copy kept", flush=True)
+                continue
             if err:
                 summary.append(
                     f"- `{pkg_path}` (`{arch}`) — prepare failed: {err}")
@@ -87,6 +108,8 @@ def run(args):
 
     print(f"\nNeeds build: {len(needs)}", file=sys.stderr)
     print(f"Prepare failures: {len(failed_pairs)}", file=sys.stderr)
+    print(f"Source unreachable (published, kept): {len(unreachable_pairs)}",
+          file=sys.stderr)
 
     return 1 if failed_pairs else 0
 
