@@ -37,12 +37,14 @@ If the upstream source can't be reached (git ls-remote/clone or a download
 fails) but an .mhl for this release and architecture is already published,
 prepare exits SOURCE_UNREACHABLE (3) without producing output, so the
 scheduled check can report a warning instead of a failure. If nothing is
-published yet, it exits 1 as before.
+published yet, it exits 1 as before. If the channel can't be reached
+either (GitHub timing out), it can't tell, and exits SOURCE_UNREACHABLE.
 """
 
 import os
 import sys
 import stat
+import time
 import shutil
 import hashlib
 import subprocess
@@ -52,6 +54,9 @@ from .config import get_base_url, release_tag_from_mhl
 
 # Exit code: the source host is unreachable, but the release is published.
 SOURCE_UNREACHABLE = 3
+
+# Attempts for a sidecar lookup on GitHub Releases.
+SIDECAR_ATTEMPTS = 3
 
 
 def _rmtree_on_error(func, path, exc_info):
@@ -287,19 +292,39 @@ def architectures_from_mip_yaml(mip_yaml):
     return archs
 
 
+def _get_sidecar(url):
+    """GET a .mip.json sidecar, retrying timeouts, 5xx and 429.
+
+    The scheduled probe makes one lookup per (package, arch), and on a bad
+    day a dozen of them hit GitHub read timeouts (2026-11-05). Returns the
+    response (a 404 included) or raises the last RequestException."""
+    for attempt in range(SIDECAR_ATTEMPTS):
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code < 500 and response.status_code != 429:
+                return response
+            response.raise_for_status()
+        except requests.RequestException as e:
+            if attempt == SIDECAR_ATTEMPTS - 1:
+                raise
+            print(f"  Retrying sidecar lookup ({e})")
+            time.sleep(2 ** (attempt + 1))
+
+
 def check_existing_package(mhl_filename, source_hash, mip_yaml,
                            release_version, release_tag=None):
     """Return True if a matching package is already published.
 
     The sidecar is looked up on `release_tag`, or on the per-package tag
-    derived from the filename when none is given."""
+    derived from the filename when none is given. If the lookup still
+    fails after retries this returns False, so the package is rebuilt."""
     if release_tag is None:
         release_tag = release_tag_from_mhl(mhl_filename)
     base_url = get_base_url(release_tag)
     mip_json_url = f"{base_url}/{mhl_filename}.mip.json"
 
     try:
-        response = requests.get(mip_json_url, timeout=10)
+        response = _get_sidecar(mip_json_url)
         if response.status_code == 404:
             return False
         response.raise_for_status()
@@ -328,14 +353,15 @@ def is_published(mhl_filename):
     """Return True if any .mhl with this filename is on the channel.
 
     Unlike check_existing_package this ignores the source hash, which
-    can't be computed when the upstream source is unreachable."""
+    can't be computed when the upstream source is unreachable. Returns
+    None if the channel can't be reached to tell."""
     release_tag = release_tag_from_mhl(mhl_filename)
     mip_json_url = f"{get_base_url(release_tag)}/{mhl_filename}.mip.json"
     try:
-        response = requests.get(mip_json_url, timeout=10)
+        response = _get_sidecar(mip_json_url)
     except requests.RequestException as e:
         print(f"  Error checking published package: {e}")
-        return False
+        return None
     return response.status_code == 200
 
 
@@ -359,7 +385,14 @@ def _source_unreachable(error, release_folder, package_name,
     mhl_filename = (
         f"{name.replace('-', '_')}-{release_version}-{architecture}.mhl")
 
-    if is_published(mhl_filename):
+    published = is_published(mhl_filename)
+    if published is None:
+        # Both hosts down: nothing could be rebuilt anyway, so warn rather
+        # than fail; the next run checks again.
+        print(f"  Could not check whether {mhl_filename} is published "
+              f"either; treating it as unreachable.")
+        return SOURCE_UNREACHABLE
+    if published:
         print(f"  {mhl_filename} is already published; keeping it. "
               f"Could not check it against the upstream source.")
         return SOURCE_UNREACHABLE
