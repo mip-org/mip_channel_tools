@@ -367,3 +367,69 @@ def test_unreachable_clone_already_published(tmp_path, monkeypatch):
     (release / "source.yaml").write_text(
         'source:\n  git: "https://example.invalid/repo"\n')
     assert _run_prepare(release, tmp_path) == prep.SOURCE_UNREACHABLE
+
+
+def test_unreachable_source_and_channel_warns(tmp_path, monkeypatch):
+    # Upstream down and GitHub timing out too (mmess on 2026-11-05): we
+    # can't tell whether it is published, so warn rather than fail.
+    from mip_channel_tools import prepare as prep
+    _unreachable_ls_remote(monkeypatch)
+    monkeypatch.setattr(prep, "is_published", lambda mhl: None)
+    release = _unreachable_release(tmp_path)
+    assert _run_prepare(release, tmp_path) == prep.SOURCE_UNREACHABLE
+
+
+def _flaky_get(monkeypatch, failures, final_status=200, body=None):
+    """Make requests.get time out `failures` times, then answer."""
+    import requests
+    calls = []
+
+    class Resp:
+        status_code = final_status
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return body or {}
+
+    def fake_get(url, timeout):
+        calls.append(url)
+        if len(calls) <= failures:
+            raise requests.ReadTimeout("read timed out")
+        return Resp()
+
+    monkeypatch.setattr(prepare_mod.requests, "get", fake_get)
+    monkeypatch.setattr(prepare_mod.time, "sleep", lambda s: None)
+    return calls
+
+
+def test_is_published_retries_timeouts(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/mip-core")
+    calls = _flaky_get(monkeypatch, failures=2)
+    assert prepare_mod.is_published("mmess-3.1-any.mhl") is True
+    assert len(calls) == 3
+
+
+def test_is_published_unknown_after_retries(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/mip-core")
+    calls = _flaky_get(monkeypatch, failures=prepare_mod.SIDECAR_ATTEMPTS)
+    assert prepare_mod.is_published("mmess-3.1-any.mhl") is None
+    assert len(calls) == prepare_mod.SIDECAR_ATTEMPTS
+
+
+def test_is_published_does_not_retry_404(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/mip-core")
+    calls = _flaky_get(monkeypatch, failures=0, final_status=404)
+    assert prepare_mod.is_published("mmess-3.1-any.mhl") is False
+    assert len(calls) == 1
+
+
+def test_check_existing_package_retries_timeouts(monkeypatch):
+    # A timeout used to count as "not published" and dispatch a rebuild.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/mip-core")
+    calls = _flaky_get(monkeypatch, failures=1,
+                       body={"source_hash": "h", "version": "2.9.8"})
+    assert prepare_mod.check_existing_package(
+        "jsonlab-2.9.8-any.mhl", "h", {}, "2.9.8") is True
+    assert len(calls) == 2
